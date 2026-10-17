@@ -80,20 +80,24 @@ export async function seedInitialDataIfNeeded() {
     });
 
     const defaultPeriods = [
+      // 上午
       { periodNumber: 1, startTime: '08:00', endTime: '08:45' },
       { periodNumber: 2, startTime: '08:55', endTime: '09:40' },
-      { periodNumber: 3, startTime: '09:50', endTime: '10:35' },
-      { periodNumber: 4, startTime: '10:45', endTime: '11:30' },
-      // 午休 90 分钟
-      { periodNumber: 5, startTime: '13:00', endTime: '13:45' },
-      { periodNumber: 6, startTime: '13:55', endTime: '14:40' },
-      { periodNumber: 7, startTime: '14:50', endTime: '15:35' },
-      { periodNumber: 8, startTime: '15:45', endTime: '16:30' },
-      // 晚餐 60 分钟
-      { periodNumber: 9, startTime: '17:30', endTime: '18:15' },
-      { periodNumber: 10, startTime: '18:25', endTime: '19:10' },
-      { periodNumber: 11, startTime: '19:20', endTime: '20:05' },
-      { periodNumber: 12, startTime: '20:15', endTime: '21:00' }
+      { periodNumber: 3, startTime: '10:00', endTime: '10:45' },
+      { periodNumber: 4, startTime: '10:55', endTime: '11:40' },
+      // 中午
+      { periodNumber: 5, startTime: '12:00', endTime: '12:45' },
+      { periodNumber: 6, startTime: '12:55', endTime: '13:40' },
+      // 下午
+      { periodNumber: 7, startTime: '14:00', endTime: '14:45' },
+      { periodNumber: 8, startTime: '14:55', endTime: '15:40' },
+      { periodNumber: 9, startTime: '16:00', endTime: '16:45' },
+      { periodNumber: 10, startTime: '16:55', endTime: '17:40' },
+      // 晚上
+      { periodNumber: 11, startTime: '18:30', endTime: '19:15' },
+      { periodNumber: 12, startTime: '19:25', endTime: '20:10' },
+      { periodNumber: 13, startTime: '20:20', endTime: '21:05' },
+      { periodNumber: 14, startTime: '21:15', endTime: '22:00' }
     ];
 
     for (const p of defaultPeriods) {
@@ -199,6 +203,36 @@ export async function seedInitialDataIfNeeded() {
         color: sc.color,
         note: sc.note
       }, sc.sessions);
+    }
+  } else {
+    // 检查已有数据库是否需要将“默认作息”平滑升级为最新的 14 节课作息
+    const defaultSchedule14V1Key = 'sleepin_schedule_14periods_v1';
+    if (!localStorage.getItem(defaultSchedule14V1Key)) {
+      try {
+        const defaultSch = schedules.find(s => s.name === '默认作息') || schedules[0];
+        if (defaultSch) {
+          const standard14Periods = [
+            { periodNumber: 1, startTime: '08:00', endTime: '08:45' },
+            { periodNumber: 2, startTime: '08:55', endTime: '09:40' },
+            { periodNumber: 3, startTime: '10:00', endTime: '10:45' },
+            { periodNumber: 4, startTime: '10:55', endTime: '11:40' },
+            { periodNumber: 5, startTime: '12:00', endTime: '12:45' },
+            { periodNumber: 6, startTime: '12:55', endTime: '13:40' },
+            { periodNumber: 7, startTime: '14:00', endTime: '14:45' },
+            { periodNumber: 8, startTime: '14:55', endTime: '15:40' },
+            { periodNumber: 9, startTime: '16:00', endTime: '16:45' },
+            { periodNumber: 10, startTime: '16:55', endTime: '17:40' },
+            { periodNumber: 11, startTime: '18:30', endTime: '19:15' },
+            { periodNumber: 12, startTime: '19:25', endTime: '20:10' },
+            { periodNumber: 13, startTime: '20:20', endTime: '21:05' },
+            { periodNumber: 14, startTime: '21:15', endTime: '22:00' }
+          ];
+          await replaceSchedulePeriods(defaultSch.id, standard14Periods);
+        }
+      } catch (err) {
+        console.warn('Auto upgrade default schedule failed:', err);
+      }
+      localStorage.setItem(defaultSchedule14V1Key, 'true');
     }
   }
 
