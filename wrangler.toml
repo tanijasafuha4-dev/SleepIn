@@ -1,0 +1,7 @@
+name = "sleepin"
+main = "worker/index.js"
+compatibility_date = "2024-09-23"
+
+[assets]
+directory = "web-app"
+binding = "ASSETS"
