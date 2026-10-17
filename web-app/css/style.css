@@ -798,11 +798,25 @@ html, body {
   box-shadow: 0 0 0 2px var(--primary-container);
 }
 
-input[type="time"].form-control,
-input[type="date"].form-control {
-  padding: 0 8px;
-  font-size: 0.88rem;
+/* 移除原生 WebKit/Blink (Android Chrome, iOS Safari) 中 time 选择框内置日历时钟图标与自带强制宽度 */
+input[type="time"]::-webkit-calendar-picker-indicator {
+  display: none !important;
+  -webkit-appearance: none;
+}
+
+input[type="time"].form-control {
+  padding: 0 4px;
+  font-size: 0.9rem;
   text-align: center;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+input[type="date"].form-control {
+  padding: 0 12px;
+  font-size: 0.92rem;
+  text-align: left;
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
@@ -817,42 +831,47 @@ textarea.form-control {
 .form-row {
   display: flex;
   gap: 10px;
+  width: 100%;
   min-width: 0;
   box-sizing: border-box;
 }
 
 .form-row > * {
   flex: 1 1 0;
+  width: 0;
   min-width: 0;
   box-sizing: border-box;
 }
 
 .form-row-responsive {
   display: flex;
-  gap: 10px;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
   min-width: 0;
   box-sizing: border-box;
 }
 
-.form-row-responsive .form-group-sm {
-  flex: 0 0 110px;
-  min-width: 0;
-}
-
+.form-row-responsive .form-group-sm,
 .form-row-responsive .form-group-lg {
-  flex: 1 1 0;
+  width: 100%;
+  flex: 1 1 100%;
   min-width: 0;
+  box-sizing: border-box;
 }
 
-@media (max-width: 420px) {
+@media (min-width: 601px) {
   .form-row-responsive {
-    flex-wrap: wrap;
-    gap: 8px;
+    flex-direction: row;
+    gap: 10px;
   }
-  .form-row-responsive .form-group-sm,
+  .form-row-responsive .form-group-sm {
+    flex: 0 0 120px;
+    width: auto;
+  }
   .form-row-responsive .form-group-lg {
-    flex: 1 1 100%;
-    width: 100%;
+    flex: 1 1 0;
+    width: auto;
   }
 }
 
@@ -1042,19 +1061,21 @@ textarea.form-control {
 .session-card .form-row {
   display: flex;
   gap: 8px;
+  width: 100%;
   min-width: 0;
   box-sizing: border-box;
 }
 
 .session-card .form-row > .form-group {
   flex: 1 1 0;
+  width: 0;
   min-width: 0;
   box-sizing: border-box;
 }
 
 .session-card input[type="time"].form-control {
-  padding: 0 6px;
-  font-size: 0.88rem;
+  padding: 0 4px;
+  font-size: 0.9rem;
   text-align: center;
   min-width: 0;
   width: 100%;

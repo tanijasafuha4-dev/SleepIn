@@ -27,7 +27,8 @@ import {
   saveCourseWithSessions,
   deleteCourse,
   exportFullBackupJSON,
-  importFullBackupJSON
+  importFullBackupJSON,
+  STANDARD_14_PERIODS
 } from './db.js';
 
 import {
@@ -559,7 +560,12 @@ function bindEvents() {
   document.getElementById('btn-close-schedule-editor').addEventListener('click', closeScheduleEditorModal);
   document.getElementById('btn-save-schedule').addEventListener('click', saveScheduleForm);
   document.getElementById('btn-generate-periods').addEventListener('click', autoGeneratePeriods);
-  document.getElementById('btn-add-period-row').addEventListener('click', addPeriodRow);
+  document.getElementById('btn-add-period-row').addEventListener('click', () => addPeriodRow());
+  document.getElementById('btn-restore-14-periods')?.addEventListener('click', () => {
+    const container = document.getElementById('period-rows-container');
+    container.innerHTML = '';
+    STANDARD_14_PERIODS.forEach(p => addPeriodRow(p.startTime, p.endTime));
+  });
   document.getElementById('btn-import-schedule-csv').addEventListener('click', () => {
     document.getElementById('input-file-schedule-csv').click();
   });
@@ -1364,11 +1370,15 @@ async function openScheduleEditorModal(scheduleId = null) {
     if (!sch) return;
     document.getElementById('sch-form-name').value = sch.name;
     const periods = await getPeriodsBySchedule(scheduleId);
-    periods.forEach(p => addPeriodRow(p.startTime, p.endTime));
+    if (periods && periods.length > 0) {
+      periods.forEach(p => addPeriodRow(p.startTime, p.endTime));
+    } else {
+      STANDARD_14_PERIODS.forEach(p => addPeriodRow(p.startTime, p.endTime));
+    }
   } else {
     document.getElementById('sch-form-name').value = '标准作息表';
-    // Defaults: 12 periods
-    autoGeneratePeriods();
+    // Defaults: 标准 14 节作息
+    STANDARD_14_PERIODS.forEach(p => addPeriodRow(p.startTime, p.endTime));
   }
 
   document.getElementById('schedule-editor-modal').classList.add('visible');
@@ -1383,7 +1393,7 @@ function autoGeneratePeriods() {
   const startStr = document.getElementById('gen-first-start').value || '08:00';
   const duration = parseInt(document.getElementById('gen-duration').value, 10) || 45;
   const breakMin = parseInt(document.getElementById('gen-break').value, 10) || 10;
-  const total = parseInt(document.getElementById('gen-count').value, 10) || 12;
+  const total = parseInt(document.getElementById('gen-count').value, 10) || 14;
 
   const [h, m] = startStr.split(':').map(Number);
   let curMins = h * 60 + m;

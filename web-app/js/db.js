@@ -67,40 +67,41 @@ function tx(storeNames, mode = 'readonly') {
   return dbInstance.transaction(storeNames, mode);
 }
 
+// ----------------- Standard 14 Periods Definition -----------------
+export const STANDARD_14_PERIODS = [
+  // 上午
+  { periodNumber: 1, startTime: '08:00', endTime: '08:45' },
+  { periodNumber: 2, startTime: '08:55', endTime: '09:40' },
+  { periodNumber: 3, startTime: '10:00', endTime: '10:45' },
+  { periodNumber: 4, startTime: '10:55', endTime: '11:40' },
+  // 中午
+  { periodNumber: 5, startTime: '12:00', endTime: '12:45' },
+  { periodNumber: 6, startTime: '12:55', endTime: '13:40' },
+  // 下午
+  { periodNumber: 7, startTime: '14:00', endTime: '14:45' },
+  { periodNumber: 8, startTime: '14:55', endTime: '15:40' },
+  { periodNumber: 9, startTime: '16:00', endTime: '16:45' },
+  { periodNumber: 10, startTime: '16:55', endTime: '17:40' },
+  // 晚上
+  { periodNumber: 11, startTime: '18:30', endTime: '19:15' },
+  { periodNumber: 12, startTime: '19:25', endTime: '20:10' },
+  { periodNumber: 13, startTime: '20:20', endTime: '21:05' },
+  { periodNumber: 14, startTime: '21:15', endTime: '22:00' }
+];
+
 // ----------------- Seeding -----------------
 export async function seedInitialDataIfNeeded() {
   const db = await getDB();
   const schedules = await getAllSchedules();
 
   if (schedules.length === 0) {
-    // 1. Seed Default Schedule (默认作息: 12节课)
+    // 1. Seed Default Schedule (默认作息: 14节课)
     const scheduleId = await addSchedule({
       name: '默认作息',
       createdAt: Date.now()
     });
 
-    const defaultPeriods = [
-      // 上午
-      { periodNumber: 1, startTime: '08:00', endTime: '08:45' },
-      { periodNumber: 2, startTime: '08:55', endTime: '09:40' },
-      { periodNumber: 3, startTime: '10:00', endTime: '10:45' },
-      { periodNumber: 4, startTime: '10:55', endTime: '11:40' },
-      // 中午
-      { periodNumber: 5, startTime: '12:00', endTime: '12:45' },
-      { periodNumber: 6, startTime: '12:55', endTime: '13:40' },
-      // 下午
-      { periodNumber: 7, startTime: '14:00', endTime: '14:45' },
-      { periodNumber: 8, startTime: '14:55', endTime: '15:40' },
-      { periodNumber: 9, startTime: '16:00', endTime: '16:45' },
-      { periodNumber: 10, startTime: '16:55', endTime: '17:40' },
-      // 晚上
-      { periodNumber: 11, startTime: '18:30', endTime: '19:15' },
-      { periodNumber: 12, startTime: '19:25', endTime: '20:10' },
-      { periodNumber: 13, startTime: '20:20', endTime: '21:05' },
-      { periodNumber: 14, startTime: '21:15', endTime: '22:00' }
-    ];
-
-    for (const p of defaultPeriods) {
+    for (const p of STANDARD_14_PERIODS) {
       await addSchedulePeriod({
         scheduleId,
         periodNumber: p.periodNumber,
@@ -205,34 +206,17 @@ export async function seedInitialDataIfNeeded() {
       }, sc.sessions);
     }
   } else {
-    // 检查已有数据库是否需要将“默认作息”平滑升级为最新的 14 节课作息
-    const defaultSchedule14V1Key = 'sleepin_schedule_14periods_v1';
-    if (!localStorage.getItem(defaultSchedule14V1Key)) {
-      try {
-        const defaultSch = schedules.find(s => s.name === '默认作息') || schedules[0];
-        if (defaultSch) {
-          const standard14Periods = [
-            { periodNumber: 1, startTime: '08:00', endTime: '08:45' },
-            { periodNumber: 2, startTime: '08:55', endTime: '09:40' },
-            { periodNumber: 3, startTime: '10:00', endTime: '10:45' },
-            { periodNumber: 4, startTime: '10:55', endTime: '11:40' },
-            { periodNumber: 5, startTime: '12:00', endTime: '12:45' },
-            { periodNumber: 6, startTime: '12:55', endTime: '13:40' },
-            { periodNumber: 7, startTime: '14:00', endTime: '14:45' },
-            { periodNumber: 8, startTime: '14:55', endTime: '15:40' },
-            { periodNumber: 9, startTime: '16:00', endTime: '16:45' },
-            { periodNumber: 10, startTime: '16:55', endTime: '17:40' },
-            { periodNumber: 11, startTime: '18:30', endTime: '19:15' },
-            { periodNumber: 12, startTime: '19:25', endTime: '20:10' },
-            { periodNumber: 13, startTime: '20:20', endTime: '21:05' },
-            { periodNumber: 14, startTime: '21:15', endTime: '22:00' }
-          ];
-          await replaceSchedulePeriods(defaultSch.id, standard14Periods);
+    // 确保默认作息完整包含标准的 14 节课（若少于 14 节则自动平滑补齐与修复）
+    try {
+      const defaultSch = schedules.find(s => s.name === '默认作息') || schedules[0];
+      if (defaultSch) {
+        const existingPeriods = await getPeriodsBySchedule(defaultSch.id);
+        if (existingPeriods.length < 14) {
+          await replaceSchedulePeriods(defaultSch.id, STANDARD_14_PERIODS);
         }
-      } catch (err) {
-        console.warn('Auto upgrade default schedule failed:', err);
       }
-      localStorage.setItem(defaultSchedule14V1Key, 'true');
+    } catch (err) {
+      console.warn('Auto ensure 14 periods failed:', err);
     }
   }
 

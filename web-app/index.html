@@ -285,9 +285,12 @@
 
         <!-- Period Rows -->
         <div class="form-group">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-            <label class="form-label">课节列表</label>
-            <button type="button" class="btn btn-sm btn-outlined" id="btn-add-period-row">+ 添加一节</button>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 6px;">
+            <label class="form-label" style="margin-bottom: 0;">课节列表</label>
+            <div style="display: flex; gap: 6px;">
+              <button type="button" class="btn btn-sm btn-outlined" id="btn-restore-14-periods">恢复默认14节</button>
+              <button type="button" class="btn btn-sm btn-outlined" id="btn-add-period-row">+ 添加一节</button>
+            </div>
           </div>
           <div id="period-rows-container"></div>
         </div>
