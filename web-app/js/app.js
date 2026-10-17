@@ -615,11 +615,6 @@ function initScreenshotCsvFeature() {
   // Open & Close
   openBtn.addEventListener('click', () => {
     modal.classList.add('visible');
-    // Load config from localStorage or AI_CONFIG defaults
-    const storedKey = localStorage.getItem('sleepin_vision_api_key');
-    document.getElementById('cfg-vision-api-key').value = storedKey || AI_CONFIG.DEFAULT_API_KEY || '';
-    document.getElementById('cfg-vision-endpoint').value = localStorage.getItem('sleepin_vision_endpoint') || AI_CONFIG.ENDPOINT;
-    document.getElementById('cfg-vision-model').value = localStorage.getItem('sleepin_vision_model') || AI_CONFIG.DEFAULT_MODEL;
   });
 
   closeBtn.addEventListener('click', () => {
@@ -716,17 +711,6 @@ function initScreenshotCsvFeature() {
     reader.readAsDataURL(file);
   }
 
-  // Save config on change
-  document.getElementById('cfg-vision-api-key').addEventListener('input', (e) => {
-    localStorage.setItem('sleepin_vision_api_key', e.target.value.trim());
-  });
-  document.getElementById('cfg-vision-endpoint').addEventListener('input', (e) => {
-    localStorage.setItem('sleepin_vision_endpoint', e.target.value.trim());
-  });
-  document.getElementById('cfg-vision-model').addEventListener('input', (e) => {
-    localStorage.setItem('sleepin_vision_model', e.target.value.trim());
-  });
-
   // Start Vision Parse
   const parseBtn = document.getElementById('btn-start-vision-parse');
   parseBtn.addEventListener('click', async () => {
@@ -734,10 +718,6 @@ function initScreenshotCsvFeature() {
       alert('请先上传或粘贴课表截图！');
       return;
     }
-
-    const apiKey = document.getElementById('cfg-vision-api-key').value.trim() || AI_CONFIG.DEFAULT_API_KEY;
-    const endpoint = document.getElementById('cfg-vision-endpoint').value.trim() || AI_CONFIG.ENDPOINT;
-    const model = document.getElementById('cfg-vision-model').value.trim() || AI_CONFIG.DEFAULT_MODEL;
 
     parseBtn.disabled = true;
     const originalText = parseBtn.innerHTML;

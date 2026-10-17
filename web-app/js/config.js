@@ -1,10 +1,9 @@
 /**
  * SleepIn Web - 全局 AI 识别服务配置 (Cloudflare / Gemini 反代)
  *
- * 💡 配置说明：
- * 1. 默认反向代理地址：https://my-free-ai.ccwu.cc/v1/chat/completions
- * 2. 默认模型：gemini-3.5-flash-lite
- * 3. 内置站长专属 API Key，所有用户无需填入任何 API 与网站，直接使用！
+ * 💡 安全架构：
+ * 前端不包含任何 API Key（防止 F12 / 网络抓包泄露），
+ * 由部署在 Cloudflare 上的反代服务 (my-free-ai.ccwu.cc) 在服务端安全注入密钥与鉴权。
  */
 
 export const AI_CONFIG = {
@@ -12,10 +11,5 @@ export const AI_CONFIG = {
   ENDPOINT: 'https://my-free-ai.ccwu.cc/v1/chat/completions',
 
   // 默认模型：gemini-3.5-flash-lite
-  DEFAULT_MODEL: 'gemini-3.5-flash-lite',
-
-  // 站长专属 API Key（内置开箱即用）
-  DEFAULT_API_KEY: (typeof atob !== 'undefined')
-    ? atob('QVEuQWI4Uk42S0wzREhJdk5SV3FxVXFjTkVyYWZJTi1BRmRfblQ5aFVoRmFGS1hMX0NzSkE=')
-    : Buffer.from('QVEuQWI4Uk42S0wzREhJdk5SV3FxVXFjTkVyYWZJTi1BRmRfblQ5aFVoRmFGS1hMX0NzSkE=', 'base64').toString('utf-8')
+  DEFAULT_MODEL: 'gemini-3.5-flash-lite'
 };

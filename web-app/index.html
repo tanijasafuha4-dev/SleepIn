@@ -542,38 +542,7 @@
             </div>
           </div>
 
-          <!-- Cloudflare Proxy Status Card -->
-          <div style="background: var(--surface-container-high); border: 1px solid var(--outline-variant); border-radius: 10px; padding: 10px 14px; font-size: 0.82rem; display: flex; align-items: center; justify-content: space-between;">
-            <div style="display: flex; align-items: center; gap: 10px;">
-              <span style="font-size: 1.2rem;">⚡</span>
-              <div>
-                <div style="font-weight: 700; color: var(--primary);">内置 AI 视觉识别服务已连接</div>
-                <div style="font-size: 0.75rem; color: var(--on-surface-variant);">反代地址：my-free-ai.ccwu.cc | 模型：gemini-3.5-flash-lite</div>
-              </div>
-            </div>
-            <span style="background: var(--primary-container); color: var(--on-primary-container); font-size: 0.72rem; padding: 3px 8px; border-radius: 12px; font-weight: 700;">免填 Key</span>
-          </div>
 
-          <!-- Optional Custom Config Accordion -->
-          <details style="background: var(--surface-container); border-radius: 8px; padding: 8px 12px; font-size: 0.82rem;">
-            <summary style="font-weight: 600; cursor: pointer; color: var(--on-surface-variant);">⚙️ 自定义接口 / 专属 Key 变量 (站长或高级配置)</summary>
-            <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
-              <div class="form-group">
-                <label class="form-label" style="font-size: 0.75rem;">API Key (默认使用 js/config.js 变量或免鉴权服务)</label>
-                <input type="password" class="form-control" id="cfg-vision-api-key" placeholder="AQ.xxxx... 或留空" style="height: 38px; font-size: 0.85rem;">
-              </div>
-              <div class="form-row">
-                <div class="form-group">
-                  <label class="form-label" style="font-size: 0.75rem;">接口 Endpoint</label>
-                  <input type="text" class="form-control" id="cfg-vision-endpoint" value="https://my-free-ai.ccwu.cc/v1/chat/completions" style="height: 38px; font-size: 0.85rem;">
-                </div>
-                <div class="form-group">
-                  <label class="form-label" style="font-size: 0.75rem;">Model</label>
-                  <input type="text" class="form-control" id="cfg-vision-model" value="gemini-3.5-flash-lite" style="height: 38px; font-size: 0.85rem;">
-                </div>
-              </div>
-            </div>
-          </details>
 
           <button class="btn btn-primary" id="btn-start-vision-parse" style="width: 100%;">
             <span>🚀 开始智能解析截图</span>
