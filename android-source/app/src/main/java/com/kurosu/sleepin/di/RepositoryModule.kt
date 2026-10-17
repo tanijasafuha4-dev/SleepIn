@@ -1,0 +1,59 @@
+package com.kurosu.sleepin.di
+
+import com.kurosu.sleepin.data.local.SleepInDatabase
+import com.kurosu.sleepin.data.csv.CsvExporter
+import com.kurosu.sleepin.data.csv.CsvImporter
+import com.kurosu.sleepin.data.csv.ScheduleCsvExporter
+import com.kurosu.sleepin.data.csv.ScheduleCsvImporter
+import com.kurosu.sleepin.data.preferences.SettingsPreferenceStore
+import com.kurosu.sleepin.data.repository.CourseRepositoryImpl
+import com.kurosu.sleepin.data.repository.ScheduleRepositoryImpl
+import com.kurosu.sleepin.data.repository.SettingsRepositoryImpl
+import com.kurosu.sleepin.data.repository.TimetableRepositoryImpl
+import com.kurosu.sleepin.data.update.GitHubUpdateRepositoryImpl
+import com.kurosu.sleepin.domain.repository.CourseRepository
+import com.kurosu.sleepin.domain.repository.ScheduleRepository
+import com.kurosu.sleepin.domain.repository.SettingsRepository
+import com.kurosu.sleepin.domain.repository.TimetableRepository
+import com.kurosu.sleepin.domain.repository.UpdateRepository
+
+/**
+ * Temporary manual repository provider.
+ * Mirrors future Hilt bindings and keeps call sites stable for later migration.
+ */
+object RepositoryModule {
+
+    fun provideCsvImporter(): CsvImporter = CsvImporter()
+
+    fun provideCsvExporter(): CsvExporter = CsvExporter()
+
+    fun provideScheduleCsvImporter(): ScheduleCsvImporter = ScheduleCsvImporter()
+
+    fun provideScheduleCsvExporter(): ScheduleCsvExporter = ScheduleCsvExporter()
+
+    fun provideTimetableRepository(database: SleepInDatabase): TimetableRepository =
+        TimetableRepositoryImpl(DatabaseModule.provideTimetableDao(database))
+
+    fun provideCourseRepository(database: SleepInDatabase): CourseRepository =
+        CourseRepositoryImpl(
+            database = database,
+            courseDao = DatabaseModule.provideCourseDao(database),
+            courseSessionDao = DatabaseModule.provideCourseSessionDao(database)
+        )
+
+    fun provideScheduleRepository(database: SleepInDatabase): ScheduleRepository =
+        ScheduleRepositoryImpl(
+            database = database,
+            scheduleDao = DatabaseModule.provideScheduleDao(database),
+            schedulePeriodDao = DatabaseModule.provideSchedulePeriodDao(database),
+            timetableDao = DatabaseModule.provideTimetableDao(database)
+        )
+
+    fun provideSettingsRepository(dataStore: SettingsPreferenceStore): SettingsRepository =
+        SettingsRepositoryImpl(dataStore)
+
+    /**
+     * Provides GitHub-backed update repository without introducing extra DI frameworks.
+     */
+    fun provideUpdateRepository(): UpdateRepository = GitHubUpdateRepositoryImpl()
+}
