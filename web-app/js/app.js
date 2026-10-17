@@ -251,7 +251,7 @@ function renderWeekGrid() {
   gridWrapper.style.display = 'flex';
 
   // Apply row height setting
-  const rowHeight = (state.settings.courseCellHeightDp || 68);
+  const rowHeight = (state.settings.courseCellHeightDp || 88);
   document.documentElement.style.setProperty('--cell-height', `${rowHeight}px`);
 
   // Render Header Dates
@@ -295,8 +295,9 @@ function renderWeekGrid() {
     sidebar.appendChild(cell);
   });
 
-  // Grid Height
+  // Grid Height (Sync both sidebar and grid content to ensure 1:1 scrollable height)
   const totalGridHeight = state.periods.length * rowHeight;
+  sidebar.style.height = `${totalGridHeight}px`;
   const gridContent = document.getElementById('grid-content');
   gridContent.style.height = `${totalGridHeight}px`;
 
@@ -418,7 +419,7 @@ function updateCurrentTimeIndicator() {
     return;
   }
 
-  const rowHeight = (state.settings.courseCellHeightDp || 68);
+  const rowHeight = (state.settings.courseCellHeightDp || 88);
   let offsetRows = null;
 
   for (let i = 0; i < sortedPeriods.length; i++) {
@@ -493,6 +494,15 @@ function bindEvents() {
   });
   document.getElementById('course-detail-backdrop').addEventListener('click', (e) => {
     if (e.target.id === 'course-detail-backdrop') closeCourseDetailSheet();
+  });
+
+  // Modal Overlays backdrop click (tap outside modal dialog to dismiss)
+  document.querySelectorAll('.modal-overlay').forEach((overlay) => {
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        overlay.classList.remove('visible');
+      }
+    });
   });
 
   // Home Menu Sheet Actions
@@ -1937,7 +1947,7 @@ function openSettingsModal() {
   });
 
   // Cell height slider
-  const cellHeight = settings.courseCellHeightDp || 68;
+  const cellHeight = settings.courseCellHeightDp || 88;
   const slider = document.getElementById('setting-cell-height-slider');
   slider.value = cellHeight;
   document.getElementById('setting-cell-height-label').textContent = `${cellHeight} px`;

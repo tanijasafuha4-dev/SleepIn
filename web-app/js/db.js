@@ -245,7 +245,7 @@ export async function seedInitialDataIfNeeded() {
       fluidCloudEnabled: true,
       themeMode: 'SYSTEM',
       dynamicColorEnabled: true,
-      courseCellHeightDp: 68,
+      courseCellHeightDp: 88,
       showNonCurrentWeekCourses: true,
       autoCheckUpdateEnabled: true
     });
@@ -260,16 +260,31 @@ export async function getSettings() {
     const store = transaction.objectStore('settings');
     const request = store.get('app_settings');
     request.onsuccess = () => {
-      resolve(request.result?.value || {
+      const defaultSettings = {
         notificationsEnabled: true,
         reminderMinutes: 10,
         fluidCloudEnabled: true,
         themeMode: 'SYSTEM',
         dynamicColorEnabled: true,
-        courseCellHeightDp: 68,
+        courseCellHeightDp: 88,
         showNonCurrentWeekCourses: true,
         autoCheckUpdateEnabled: true
-      });
+      };
+
+      const val = request.result?.value;
+      if (!val) {
+        resolve(defaultSettings);
+        return;
+      }
+
+      // 如果是旧版本的 68px 挤压高度，自动升级为舒适的 88px 可滚动高度
+      if (!localStorage.getItem('sleepin_cell_height_upgraded_v2') && (!val.courseCellHeightDp || val.courseCellHeightDp <= 68)) {
+        val.courseCellHeightDp = 88;
+        localStorage.setItem('sleepin_cell_height_upgraded_v2', 'true');
+        updateSettings({ courseCellHeightDp: 88 }).catch(console.error);
+      }
+
+      resolve({ ...defaultSettings, ...val });
     };
     request.onerror = () => resolve({});
   });
