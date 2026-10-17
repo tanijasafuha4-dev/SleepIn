@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sleepin-pwa-v7';
+const CACHE_NAME = 'sleepin-pwa-v8';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
