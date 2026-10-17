@@ -11,7 +11,7 @@
 export const AI_CONFIG = {
   // 服务端代理端点（同源访问使用相对路径，跨域访问使用完整的 workers.dev 端点）
   ENDPOINT: (typeof window !== 'undefined' && window.location.hostname.includes('workers.dev'))
-    ? './v1/chat/completions'
+    ? '/v1/chat/completions'
     : 'https://sleepin.tanijasafuha4.workers.dev/v1/chat/completions',
 
   // 默认模型：gemini-3.5-flash-lite

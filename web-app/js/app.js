@@ -725,10 +725,7 @@ function initScreenshotCsvFeature() {
 
     try {
       const records = await parseScreenshotWithVisionAPI({
-        imageBase64: currentScreenshotBase64,
-        apiKey,
-        endpoint,
-        model
+        imageBase64: currentScreenshotBase64
       });
 
       renderParsedTable(records);
