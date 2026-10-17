@@ -82,16 +82,25 @@ flowchart TD
 
 ---
 
-## ☁️ Cloudflare Worker Gemini 反代配置说明
+## 🛡️ 开源安全与 API Key 保护机制 (.gitignore)
 
-在 `cloudflare-worker/worker.js` 中为您提供了完整的 Cloudflare Worker 代理脚本：
-1. **工作原理**：
-   - **客户端输入**：接收 OpenAI 规范的 `/v1/chat/completions` 请求（包含图片 Base64）。
-   - **服务端转换**：自动转换为 Google Gemini REST API (`v1beta`) 的 `contents` 与 `inlineData` 结构。
-   - **跨域与流式**：全面支持 CORS 预检以及 SSE (Server-Sent Events) 流式推送。
-2. **配置变量**：
-   - **方式 1（推荐）**：在 Cloudflare Dashboard -> Workers & Pages -> 设置 -> 变量中，添加环境变量 `GEMINI_API_KEY`。
-   - **方式 2**：直接在 `web-app/js/config.js` 的 `DEFAULT_API_KEY` 变量中填入您的 API Key。
+本项目完全开源在 GitHub，**严禁将真实的 API Key 直接提交到代码仓库中**（否则会被 GitHub 密钥扫描机器人检测并自动撤销作废）。为此我们内置了优雅的分层保护机制：
+
+1. **本地私有配置安全隔离（推荐）**：
+   - 根目录 `.gitignore` 已永久排除了 `web-app/js/config.local.js`。
+   - 您只需复制 `web-app/js/config.local.example.js` 为 `config.local.js`，填入您的真实 `AQ.` 开头的 API Key。
+   - `web-app/js/config.js` 会在运行时自动动态合并本地私有配置，且 Git 绝不会把您的私有 Key 提交到 GitHub 上！
+2. **设备端本地持久化记忆**：
+   - 用户在网页“自定义接口 / 专属 Key 变量”输入框填入一次 API Key 后，前端会自动将其安全保存在该设备的 `localStorage` 中。
+   - 无论刷新页面、添加到 iPhone 主屏幕全屏运行，均无需反复填写，随开随用。
+
+## ☁️ 关于 Cloudflare 与反代服务说明
+
+1. **为什么 Cloudflare 显示“不能将变量添加到只有静态资产的 Worker”？**
+   - 如果在 Cloudflare 部署的是静态前端页面（Workers with Static Assets），Cloudflare 仅将其作为 CDN 静态分发，没有动态 Node.js/V8 服务端运行时，因此管理面板会锁定“运行时变量”。
+2. **反向代理网站 `my-free-ai.ccwu.cc`**：
+   - 您的反向代理已经稳定运行，接收标准的 OpenAI 格式请求并转换为 Google Gemini REST API (`v1beta`)。
+   - 前端已彻底移除此前未填 Key 时发送的占位头，保持请求头干净；无论通过请求头携带 Key 还是通过反代默认鉴权，均能完美识别！
 
 
 ## 🚀 GitHub Pages 在线部署与使用指南
