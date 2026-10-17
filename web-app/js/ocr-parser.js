@@ -8,6 +8,7 @@
  */
 
 import { encodeCsvField } from './csv.js';
+import { AI_CONFIG } from './config.js';
 
 // 多模态 Vision Prompt 模板
 export const VISION_SYSTEM_PROMPT = `你是一个高校课程表图像识别专家。你的任务是将用户上传的高校教务系统课表截图精确解析为符合 SleepIn 课表规范的结构化数据。
@@ -38,31 +39,39 @@ export const VISION_SYSTEM_PROMPT = `你是一个高校课程表图像识别专�
 ]`;
 
 /**
- * 调用 OpenAI 兼容格式视觉接口解析图片
+ * 调用 OpenAI 兼容格式视觉接口解析图片（默认接入 Cloudflare Gemini 反向代理）
  */
 export async function parseScreenshotWithVisionAPI({
   imageBase64,
-  apiKey,
-  endpoint = 'https://api.openai.com/v1/chat/completions',
-  model = 'gpt-4o-mini'
+  apiKey = '',
+  endpoint = '',
+  model = ''
 }) {
-  if (!apiKey) {
-    throw new Error('请先在配置中填写有效的 Vision API Key');
-  }
+  const activeEndpoint = (endpoint && endpoint.trim()) || AI_CONFIG.ENDPOINT;
+  const activeModel = (model && model.trim()) || AI_CONFIG.DEFAULT_MODEL;
+  const activeApiKey = (apiKey && apiKey.trim()) || AI_CONFIG.DEFAULT_API_KEY || localStorage.getItem('sleepin_vision_api_key') || '';
 
   // 补齐 data:image 前缀
   const dataUrl = imageBase64.startsWith('data:')
     ? imageBase64
     : `data:image/jpeg;base64,${imageBase64}`;
 
-  const response = await fetch(endpoint, {
+  const headers = {
+    'Content-Type': 'application/json'
+  };
+
+  if (activeApiKey) {
+    headers['Authorization'] = `Bearer ${activeApiKey}`;
+  } else {
+    // 若前端未配置 Key，发送统一 Bearer 凭证，方便 Cloudflare 反代服务端在环境变量中自动注入真实 Key
+    headers['Authorization'] = 'Bearer sleepin-internal-free-proxy';
+  }
+
+  const response = await fetch(activeEndpoint, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`
-    },
+    headers,
     body: JSON.stringify({
-      model: model || 'gpt-4o-mini',
+      model: activeModel,
       messages: [
         {
           role: 'system',
@@ -90,18 +99,32 @@ export async function parseScreenshotWithVisionAPI({
 
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`API 请求失败 (${response.status}): ${errText}`);
+    let hint = '';
+    if (response.status === 401 || response.status === 403) {
+      hint = '\n\n【排查建议】：接口需要 API Key 鉴权。您可以在 web-app/js/config.js 的 DEFAULT_API_KEY 变量中填入您的 API Key，或在 Cloudflare Worker 中配置 GEMINI_API_KEY 环境变量。';
+    }
+    throw new Error(`API 请求失败 (${response.status}): ${errText}${hint}`);
   }
 
   const json = await response.json();
   const rawContent = json.choices?.[0]?.message?.content || '';
 
-  // 清洗 Markdown 代码块
-  const cleaned = rawContent.replace(/```json/g, '').replace(/```/g, '').trim();
-  const records = JSON.parse(cleaned);
+  // 清洗 Markdown 代码块并安全提取 JSON 数组
+  let jsonStr = rawContent.replace(/```json/gi, '').replace(/```/gi, '').trim();
+  const arrayMatch = jsonStr.match(/\[[\s\S]*\]/);
+  if (arrayMatch) {
+    jsonStr = arrayMatch[0];
+  }
+
+  let records;
+  try {
+    records = JSON.parse(jsonStr);
+  } catch (parseErr) {
+    throw new Error(`模型返回内容无法解析为 JSON: ${parseErr.message}\n原始输出: ${rawContent.slice(0, 200)}...`);
+  }
 
   if (!Array.isArray(records)) {
-    throw new Error('接口返回格式异常：未返回数组');
+    throw new Error('接口返回格式异常：未能识别出课程记录数组');
   }
 
   return normalizeParsedRecords(records);

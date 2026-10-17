@@ -61,21 +61,38 @@ flowchart TD
     D --> F["一键直接导入到当前课程表"]
 ```
 
-### 2. 为什么选用多模态视觉方案？
+### 2. 为什么选用多模态视觉方案与 Cloudflare Gemini 反代？
 - **传统 OCR 的局限**：国内各高校教务系统（正方、强智、青果、URP 等）截图排版差异极大，常常出现多节连堂合并单元格、无明显网格线、单双周格式杂乱（如 `1-16(单)`、`3-15周`、`[01-02节]`）。传统 OCR + 固定正则切分经常发生单元格错位与漏行。
-- **视觉大模型（Vision LLM）的优势**：利用 GPT-4o-mini、Gemini 1.5 Flash 或开源多模态大模型对复杂表格的深层空间结构理解能力，配合 SleepIn 专有的视觉提取 Prompt，直接输出 100% 符合规范的结构化 JSON。
-- **纯前端隐私保护**：API Key 与图片均在用户本地浏览器处理，直连模型接口，不经由任何第三方中转服务器。
+- **视觉大模型（Vision LLM）的优势**：利用 Gemini 视觉大模型对复杂二维表格的深层空间结构理解能力，配合专有的视觉结构化 Prompt，直接输出 100% 符合规范的结构化 JSON。
+- **免用户填写配置（内置 Cloudflare 反代）**：
+  - 前端已默认接入您的 Cloudflare Gemini 反向代理服务：`https://my-free-ai.ccwu.cc/v1/chat/completions`。
+  - 默认模型设定为：`gemini-3.5-flash-lite`。
+  - **普通用户体验**：访问网站无需输入任何 API Key 或反代网址，上传截图后直接点击“开始智能解析”即可秒级完成！
+  - **站长配置变量**：在 `web-app/js/config.js` 中提供 `DEFAULT_API_KEY` 变量，您只需填入您的 API Key，即可供所有访客直接使用；或者在 Cloudflare Worker 的后台环境变量中设置 `GEMINI_API_KEY`，实现服务端静默鉴权。
 
 ### 3. 使用方法
 1. 在网页端点击 **“📸 课表截图转 CSV”** 按钮。
 2. **选择截图**：可以直接点击上传，或者在网页窗口中直接按 **`Ctrl+V`** 粘贴剪贴板里的课表截图。
 3. **识别与提取**：
-   - **方式 A（AI 视觉大模型）**：在配置中输入自己的 API Key（支持 OpenAI / Gemini / 兼容接口），点击“开始智能解析截图”。
-   - **方式 B（教务文本一键提取）**：直接从教务系统网页全选复制课表文字，粘贴到文本框中点击“智能提取”。
+   - **方式 A（一键 AI 识别，推荐）**：无需任何配置，直接点击“开始智能解析截图”，系统通过内置的 `my-free-ai.ccwu.cc` 反代与 `gemini-3.5-flash-lite` 模型秒级完成识别。
+   - **方式 B（教务文本智能提取）**：直接从教务系统网页全选复制课表文字，粘贴到文本框中点击“智能提取”。
+   - **高级自定义（可选）**：如需使用自己的私有 API Key 或其他 OpenAI 兼容端点，可展开“自定义接口 / 专属 Key 变量”修改。
 4. **校对与导出**：
    - 界面立即渲染出直观的可编辑校对表格，确认无误后可点击 **“💾 导出为标准 CSV 文件”**（可分享给他人导入）或 **“📥 直接导入到当前课表”**！
 
 ---
+
+## ☁️ Cloudflare Worker Gemini 反代配置说明
+
+在 `cloudflare-worker/worker.js` 中为您提供了完整的 Cloudflare Worker 代理脚本：
+1. **工作原理**：
+   - **客户端输入**：接收 OpenAI 规范的 `/v1/chat/completions` 请求（包含图片 Base64）。
+   - **服务端转换**：自动转换为 Google Gemini REST API (`v1beta`) 的 `contents` 与 `inlineData` 结构。
+   - **跨域与流式**：全面支持 CORS 预检以及 SSE (Server-Sent Events) 流式推送。
+2. **配置变量**：
+   - **方式 1（推荐）**：在 Cloudflare Dashboard -> Workers & Pages -> 设置 -> 变量中，添加环境变量 `GEMINI_API_KEY`。
+   - **方式 2**：直接在 `web-app/js/config.js` 的 `DEFAULT_API_KEY` 变量中填入您的 API Key。
+
 
 ## 🚀 GitHub Pages 在线部署与使用指南
 

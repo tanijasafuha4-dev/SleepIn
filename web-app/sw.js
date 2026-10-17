@@ -1,9 +1,10 @@
-const CACHE_NAME = 'sleepin-pwa-v2';
+const CACHE_NAME = 'sleepin-pwa-v3';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
   './manifest.json',
   './css/style.css',
+  './js/config.js',
   './js/app.js',
   './js/db.js',
   './js/csv.js',

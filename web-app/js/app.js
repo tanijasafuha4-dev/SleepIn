@@ -64,6 +64,8 @@ import {
   convertRecordsToSleepInCsv
 } from './ocr-parser.js';
 
+import { AI_CONFIG } from './config.js';
+
 
 // ---------------- App State ----------------
 const state = {
@@ -613,10 +615,11 @@ function initScreenshotCsvFeature() {
   // Open & Close
   openBtn.addEventListener('click', () => {
     modal.classList.add('visible');
-    // Load config from localStorage
-    document.getElementById('cfg-vision-api-key').value = localStorage.getItem('sleepin_vision_api_key') || '';
-    document.getElementById('cfg-vision-endpoint').value = localStorage.getItem('sleepin_vision_endpoint') || 'https://api.openai.com/v1/chat/completions';
-    document.getElementById('cfg-vision-model').value = localStorage.getItem('sleepin_vision_model') || 'gpt-4o-mini';
+    // Load config from localStorage or AI_CONFIG defaults
+    const storedKey = localStorage.getItem('sleepin_vision_api_key');
+    document.getElementById('cfg-vision-api-key').value = storedKey || AI_CONFIG.DEFAULT_API_KEY || '';
+    document.getElementById('cfg-vision-endpoint').value = localStorage.getItem('sleepin_vision_endpoint') || AI_CONFIG.ENDPOINT;
+    document.getElementById('cfg-vision-model').value = localStorage.getItem('sleepin_vision_model') || AI_CONFIG.DEFAULT_MODEL;
   });
 
   closeBtn.addEventListener('click', () => {
@@ -732,14 +735,9 @@ function initScreenshotCsvFeature() {
       return;
     }
 
-    const apiKey = document.getElementById('cfg-vision-api-key').value.trim();
-    if (!apiKey) {
-      alert('请先展开【AI 视觉模型接口配置】填写您的 API Key！\n（支持任何兼容 OpenAI 格式的 Vision 接口，如 gpt-4o-mini、Gemini 等）');
-      return;
-    }
-
-    const endpoint = document.getElementById('cfg-vision-endpoint').value.trim();
-    const model = document.getElementById('cfg-vision-model').value.trim();
+    const apiKey = document.getElementById('cfg-vision-api-key').value.trim() || AI_CONFIG.DEFAULT_API_KEY;
+    const endpoint = document.getElementById('cfg-vision-endpoint').value.trim() || AI_CONFIG.ENDPOINT;
+    const model = document.getElementById('cfg-vision-model').value.trim() || AI_CONFIG.DEFAULT_MODEL;
 
     parseBtn.disabled = true;
     const originalText = parseBtn.innerHTML;
