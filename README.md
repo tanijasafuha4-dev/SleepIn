@@ -64,41 +64,35 @@ flowchart TD
 ### 2. 为什么选用多模态视觉方案与 Cloudflare Gemini 反代？
 - **传统 OCR 的局限**：国内各高校教务系统（正方、强智、青果、URP 等）截图排版差异极大，常常出现多节连堂合并单元格、无明显网格线、单双周格式杂乱（如 `1-16(单)`、`3-15周`、`[01-02节]`）。传统 OCR + 固定正则切分经常发生单元格错位与漏行。
 - **视觉大模型（Vision LLM）的优势**：利用 Gemini 视觉大模型对复杂二维表格的深层空间结构理解能力，配合专有的视觉结构化 Prompt，直接输出 100% 符合规范的结构化 JSON。
-- **免用户填写配置（内置 Cloudflare 反代）**：
-  - 前端已默认接入您的 Cloudflare Gemini 反向代理服务：`https://my-free-ai.ccwu.cc/v1/chat/completions`。
-  - 默认模型设定为：`gemini-3.5-flash-lite`。
-  - **普通用户体验**：访问网站无需输入任何 API Key 或反代网址，上传截图后直接点击“开始智能解析”即可秒级完成！
-  - **站长配置变量**：在 `web-app/js/config.js` 中提供 `DEFAULT_API_KEY` 变量，您只需填入您的 API Key，即可供所有访客直接使用；或者在 Cloudflare Worker 的后台环境变量中设置 `GEMINI_API_KEY`，实现服务端静默鉴权。
+- **免用户填写配置（内置 Cloudflare 全栈 Worker 服务端鉴权）**：
+  - 前端请求统一经由项目内置的 Cloudflare 全栈 Worker 网关 (`worker/index.js`)；
+  - 默认模型设定为：`gemini-3.5-flash-lite`；
+  - **普通访客体验**：访问网站无需输入任何 API Key 或反代网址，上传截图后直接点击“开始智能解析”即可秒级完成！
+  - **站长密钥安全**：密钥直接配置在 Cloudflare 仪表盘的加密环境变量（`GEMINI_API_KEY` 或 `GEMINI_API_KEYS`）中，支持单 Key 或多 Key 自动轮询分流。前端代码、GitHub 仓库以及访客抓包均完全接触不到真实密钥！
 
 ### 3. 使用方法
 1. 在网页端点击 **“📸 课表截图转 CSV”** 按钮。
 2. **选择截图**：可以直接点击上传，或者在网页窗口中直接按 **`Ctrl+V`** 粘贴剪贴板里的课表截图。
 3. **识别与提取**：
-   - **方式 A（一键 AI 识别，推荐）**：无需任何配置，直接点击“开始智能解析截图”，系统通过内置的 `my-free-ai.ccwu.cc` 反代与 `gemini-3.5-flash-lite` 模型秒级完成识别。
+   - **方式 A（一键 AI 识别，推荐）**：无需任何配置，直接点击“开始智能解析截图”，由服务端安全转发并提取；
    - **方式 B（教务文本智能提取）**：直接从教务系统网页全选复制课表文字，粘贴到文本框中点击“智能提取”。
-   - **高级自定义（可选）**：如需使用自己的私有 API Key 或其他 OpenAI 兼容端点，可展开“自定义接口 / 专属 Key 变量”修改。
 4. **校对与导出**：
    - 界面立即渲染出直观的可编辑校对表格，确认无误后可点击 **“💾 导出为标准 CSV 文件”**（可分享给他人导入）或 **“📥 直接导入到当前课表”**！
 
 ---
 
-## 🛡️ 开源安全与 API Key 保护机制
+## ☁️ Cloudflare 全栈 Worker 部署与多 Key 配置说明
 
-本项目完全开源在 GitHub，**严禁将真实的 API Key 直接提交到代码仓库中**（否则会被 GitHub 密钥扫描机器人检测并自动撤销作废）。为此我们内置了安全、纯静态的本地持久化机制：
+本项目通过根目录的 `wrangler.toml` 与 `worker/index.js`，将 SleepIn 构建为标准的 Cloudflare 全栈应用：
 
-1. **设备端本地持久化记忆（推荐）**：
-   - 用户在网页“自定义接口 / 专属 Key 变量”输入框填入一次 `AQ.` 密钥后，前端会自动将其安全保存在该设备的浏览器 `localStorage` 中。
-   - 绝不经过任何第三方，无论刷新页面、关闭浏览器、还是添加到 iPhone 主屏幕全屏运行，均自动读取，无需反复填写。
-2. **开源代码零泄露风险**：
-   - 代码库中 `web-app/js/config.js` 的 `DEFAULT_API_KEY` 默认留空，所有个人密钥仅存在于用户自己的设备本地，保证 100% 安全合规。
-
-## ☁️ 关于 Cloudflare 与反代服务说明
-
-1. **为什么 Cloudflare 显示“不能将变量添加到只有静态资产的 Worker”？**
-   - 如果在 Cloudflare 部署的是静态前端页面（Workers with Static Assets），Cloudflare 仅将其作为 CDN 静态分发，没有动态 Node.js/V8 服务端运行时，因此管理面板会锁定“运行时变量”。
-2. **反向代理网站 `my-free-ai.ccwu.cc`**：
-   - 您的反向代理已经稳定运行，接收标准的 OpenAI 格式请求并转换为 Google Gemini REST API (`v1beta`)。
-   - 前端已彻底移除此前未填 Key 时发送的占位头，保持请求头干净；无论通过请求头携带 Key 还是通过反代默认鉴权，均能完美识别！
+1. **部署配置**：
+   - `wrangler.toml` 指定主脚本为 `worker/index.js`，静态目录为 `web-app`；
+   - 自动解除纯静态资产限制，支持在 Cloudflare 后台随时配置加密环境变量。
+2. **多 Key 负载均衡**：
+   - 登录 Cloudflare Dashboard -> 进入 `sleepin` 项目 -> **设置 (Settings)** -> **变量和机密 (Variables and Secrets)**；
+   - 添加变量：
+     - 单个 Key：变量名为 `GEMINI_API_KEY`，值填入您的 API Key（以 `AQ.` 开头）；
+     - 多个 Key：变量名为 `GEMINI_API_KEYS`，值填入多个 Key 并以逗号分隔（如 `AQ.key1,AQ.key2`），云端自动随机轮询，防止单一密钥超频或耗尽配额！
 
 
 ## 🚀 GitHub Pages 在线部署与使用指南
@@ -145,8 +139,12 @@ python -m http.server 8080 --directory web-app
 
 ```text
 another-sleepin/
+├── .gitignore                 # Git 忽略配置
 ├── AGENTS.md                  # 常驻自动化与开发准则
 ├── README.md                  # 本项目总说明文档
+├── wrangler.toml              # Cloudflare 全栈部署配置
+├── worker/                    # Cloudflare 服务端脚本
+│   └── index.js               # 服务端多 Key 轮询网关与静态托管
 ├── android-source/            # 原开源安卓项目完整源码
 │   ├── app/                   # Android App 模块 (Kotlin / Jetpack Compose / Room)
 │   ├── docs/                  # 原项目设计与开发文档
@@ -159,7 +157,8 @@ another-sleepin/
     │   └── style.css          # Material Design 3 设计体系与移动端适配样式
     ├── js/
     │   ├── app.js             # 主应用状态协调器 (MVVM)
-    │   ├── db.js              # IndexedDB 本地持久化与默认数据播种
+    │   ├── config.js          # 全局端点配置
+    │   ├── db.js              # IndexedDB 本地持久化与默认 14 节课作息播种
     │   ├── csv.js             # 课程表/作息表 CSV 编解码与导入导出引擎
     │   ├── ocr-parser.js      # 课表截图视觉识别与文本提取解析器
     │   ├── conflict.js        # 课程时间冲突检测算法

@@ -49,7 +49,7 @@ export async function parseScreenshotWithVisionAPI({
 }) {
   const activeEndpoint = (endpoint && endpoint.trim()) || AI_CONFIG.ENDPOINT;
   const activeModel = (model && model.trim()) || AI_CONFIG.DEFAULT_MODEL;
-  const activeApiKey = (apiKey && apiKey.trim()) || AI_CONFIG.DEFAULT_API_KEY || localStorage.getItem('sleepin_vision_api_key') || '';
+  const activeApiKey = (apiKey && apiKey.trim()) || '';
 
   // 补齐 data:image 前缀
   const dataUrl = imageBase64.startsWith('data:')
@@ -98,7 +98,7 @@ export async function parseScreenshotWithVisionAPI({
     const errText = await response.text();
     let hint = '';
     if (response.status === 401 || response.status === 403) {
-      hint = '\n\n【排查建议】：接口需要 API Key 鉴权。您可以在 web-app/js/config.js 的 DEFAULT_API_KEY 变量中填入您的 API Key（如 AQ.xxxx...），或在 Cloudflare Worker 中配置 GEMINI_API_KEY / API_KEY 环境变量。';
+      hint = '\n\n【排查建议】：接口鉴权未通过。请确保已在 Cloudflare 后台设置 GEMINI_API_KEY 或 GEMINI_API_KEYS 变量。';
     }
     throw new Error(`API 请求失败 (${response.status}): ${errText}${hint}`);
   }

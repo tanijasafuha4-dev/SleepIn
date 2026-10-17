@@ -1,16 +1,12 @@
-# 本地私有 API Key 配置文件（绝不提交到 GitHub 开源仓库，防止密钥泄露）
-web-app/js/config.local.js
-*.local.js
-.env
-.env.local
-
-# 操作系统与编辑器生成文件
+# 操作系统与编辑器文件
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
 *.log
 
-# 临时测试与构建缓存
+# 依赖、构建缓存与 Wrangler 本地状态
 node_modules/
 .cache/
+dist/
+.wrangler/
