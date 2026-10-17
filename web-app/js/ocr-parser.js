@@ -62,9 +62,6 @@ export async function parseScreenshotWithVisionAPI({
 
   if (activeApiKey) {
     headers['Authorization'] = `Bearer ${activeApiKey}`;
-  } else {
-    // 若前端未配置 Key，发送统一 Bearer 凭证，方便 Cloudflare 反代服务端在环境变量中自动注入真实 Key
-    headers['Authorization'] = 'Bearer sleepin-internal-free-proxy';
   }
 
   const response = await fetch(activeEndpoint, {
@@ -101,7 +98,7 @@ export async function parseScreenshotWithVisionAPI({
     const errText = await response.text();
     let hint = '';
     if (response.status === 401 || response.status === 403) {
-      hint = '\n\n【排查建议】：接口需要 API Key 鉴权。您可以在 web-app/js/config.js 的 DEFAULT_API_KEY 变量中填入您的 API Key，或在 Cloudflare Worker 中配置 GEMINI_API_KEY 环境变量。';
+      hint = '\n\n【排查建议】：接口需要 API Key 鉴权。您可以在 web-app/js/config.js 的 DEFAULT_API_KEY 变量中填入您的 API Key（如 AQ.xxxx...），或在 Cloudflare Worker 中配置 GEMINI_API_KEY / API_KEY 环境变量。';
     }
     throw new Error(`API 请求失败 (${response.status}): ${errText}${hint}`);
   }

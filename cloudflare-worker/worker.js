@@ -72,7 +72,7 @@ export default {
       }
 
       if (!apiKey) {
-        apiKey = env?.GEMINI_API_KEY || DEFAULT_GEMINI_KEY;
+        apiKey = env?.GEMINI_API_KEY || env?.API_KEY || env?.GEMINI_KEY || DEFAULT_GEMINI_KEY;
       }
 
       if (!apiKey) {
