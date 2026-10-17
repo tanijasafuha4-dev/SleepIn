@@ -211,10 +211,11 @@
           <select class="form-control" id="tt-form-schedule"></select>
         </div>
 
-        <div style="display: flex; gap: 8px; margin-top: 6px;">
+        <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
           <input type="file" id="input-file-timetable-csv" accept=".csv,text/csv" style="display: none;">
           <button type="button" class="btn btn-outlined btn-sm" id="btn-import-timetable-csv">导入 CSV 课程表</button>
           <button type="button" class="btn btn-outlined btn-sm" id="btn-export-timetable-csv">导出 CSV 课程表</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-open-screenshot-csv">📸 课表截图转 CSV</button>
         </div>
       </div>
       <div class="modal-footer">
@@ -503,6 +504,112 @@
             <button class="btn btn-secondary btn-sm" id="btn-check-update">检查更新</button>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==========================================================================
+       Screenshot to CSV Modal (📸 课表截图转 CSV)
+       ========================================================================== -->
+  <div class="modal-overlay" id="screenshot-csv-modal">
+    <div class="modal-dialog" style="max-width: 620px;">
+      <div class="modal-header">
+        <div class="modal-title">📸 课表截图转 CSV</div>
+        <button class="icon-btn" id="btn-close-screenshot-csv">✕</button>
+      </div>
+      <div class="modal-body">
+        <!-- Tabs -->
+        <div style="display: flex; gap: 8px; border-bottom: 1px solid var(--outline-variant); padding-bottom: 8px;">
+          <button type="button" class="btn btn-sm btn-primary" id="tab-btn-image-mode">图片截图识别</button>
+          <button type="button" class="btn btn-sm btn-outlined" id="tab-btn-text-mode">文本智能解析</button>
+        </div>
+
+        <!-- Tab 1: Image Mode -->
+        <div id="panel-image-mode" style="display: flex; flex-direction: column; gap: 12px;">
+          <!-- Dropzone -->
+          <div id="dropzone-screenshot" style="border: 2px dashed var(--outline); border-radius: 12px; padding: 24px; text-align: center; cursor: pointer; background: var(--surface-container-lowest); transition: border-color 0.2s;">
+            <input type="file" id="input-screenshot-file" accept="image/*" style="display: none;">
+            <div id="dropzone-prompt">
+              <div style="font-size: 2rem; margin-bottom: 8px;">🖼️</div>
+              <div style="font-weight: 600; font-size: 0.95rem; margin-bottom: 4px;">点击或拖拽上传课表截图</div>
+              <div style="font-size: 0.8rem; color: var(--outline);">支持手机相册图片，也支持直接在这个窗口中按 Ctrl+V 粘贴截图</div>
+            </div>
+            <div id="dropzone-preview" style="display: none; position: relative;">
+              <img id="img-screenshot-preview" src="" alt="截图预览" style="max-height: 180px; max-width: 100%; border-radius: 8px; object-fit: contain;">
+              <div style="margin-top: 6px;">
+                <button type="button" class="btn btn-sm btn-outlined" id="btn-reselect-image">重新选图</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Vision API Config Accordion -->
+          <details style="background: var(--surface-container); border-radius: 8px; padding: 10px 12px; font-size: 0.85rem;">
+            <summary style="font-weight: 600; cursor: pointer; color: var(--primary);">⚙️ AI 视觉模型接口配置 (OpenAI / Gemini / 兼容接口)</summary>
+            <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+              <div class="form-group">
+                <label class="form-label" style="font-size: 0.75rem;">API Key (仅保存在本地浏览器中，绝不上传第三方)</label>
+                <input type="password" class="form-control" id="cfg-vision-api-key" placeholder="sk-..." style="height: 38px; font-size: 0.85rem;">
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label" style="font-size: 0.75rem;">接口 Endpoint</label>
+                  <input type="text" class="form-control" id="cfg-vision-endpoint" value="https://api.openai.com/v1/chat/completions" style="height: 38px; font-size: 0.85rem;">
+                </div>
+                <div class="form-group">
+                  <label class="form-label" style="font-size: 0.75rem;">Model</label>
+                  <input type="text" class="form-control" id="cfg-vision-model" value="gpt-4o-mini" style="height: 38px; font-size: 0.85rem;">
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <button class="btn btn-primary" id="btn-start-vision-parse" style="width: 100%;">
+            <span>🚀 开始智能解析截图</span>
+          </button>
+        </div>
+
+        <!-- Tab 2: Text Mode -->
+        <div id="panel-text-mode" style="display: none; flex-direction: column; gap: 10px;">
+          <div class="form-group">
+            <label class="form-label">粘贴教务系统课表文本 / 原始课表文字</label>
+            <textarea class="form-control" id="input-raw-timetable-text" placeholder="例如：高等数学 周一 第1-2节 理教201 1-16周&#10;大学英语 周三 第3-4节 外语楼305 1-16(单)" style="height: 120px; font-size: 0.85rem; font-family: monospace;"></textarea>
+          </div>
+          <button class="btn btn-primary" id="btn-start-text-parse" style="width: 100%;">
+            <span>⚡ 智能提取课程记录</span>
+          </button>
+        </div>
+
+        <!-- Review & Verification Section -->
+        <div id="parsed-results-wrapper" style="display: none; margin-top: 14px; border-top: 1px solid var(--outline-variant); padding-top: 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <div style="font-weight: 700; font-size: 0.95rem; color: var(--primary);">
+              📋 识别结果校对表 (<span id="parsed-count-badge">0</span> 门课时)
+            </div>
+            <button type="button" class="btn btn-sm btn-outlined" id="btn-add-parsed-row">+ 增加一行</button>
+          </div>
+
+          <div style="max-height: 220px; overflow-y: auto; overflow-x: auto; border: 1px solid var(--outline-variant); border-radius: 8px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 0.75rem; text-align: left;" id="parsed-records-table">
+              <thead style="background: var(--surface-container); position: sticky; top: 0; z-index: 1;">
+                <tr>
+                  <th style="padding: 6px 8px; border-bottom: 1px solid var(--outline-variant);">课程名</th>
+                  <th style="padding: 6px 8px; border-bottom: 1px solid var(--outline-variant);">星期</th>
+                  <th style="padding: 6px 8px; border-bottom: 1px solid var(--outline-variant);">节次</th>
+                  <th style="padding: 6px 8px; border-bottom: 1px solid var(--outline-variant);">周次</th>
+                  <th style="padding: 6px 8px; border-bottom: 1px solid var(--outline-variant);">地点</th>
+                  <th style="padding: 6px 8px; border-bottom: 1px solid var(--outline-variant);">教师</th>
+                  <th style="padding: 6px 8px; border-bottom: 1px solid var(--outline-variant); width: 40px;">操作</th>
+                </tr>
+              </thead>
+              <tbody id="parsed-records-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer" id="parsed-footer-actions" style="display: none;">
+        <button class="btn btn-outlined btn-sm" id="btn-download-parsed-csv">💾 导出为标准 CSV 文件</button>
+        <button class="btn btn-primary btn-sm" id="btn-import-parsed-to-active">📥 直接导入到当前课表</button>
       </div>
     </div>
   </div>

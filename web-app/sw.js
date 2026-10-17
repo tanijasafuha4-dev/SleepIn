@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sleepin-pwa-v1';
+const CACHE_NAME = 'sleepin-pwa-v2';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -10,6 +10,7 @@ const ASSETS_TO_CACHE = [
   './js/conflict.js',
   './js/reminder.js',
   './js/theme.js',
+  './js/ocr-parser.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/apple-touch-icon.png',

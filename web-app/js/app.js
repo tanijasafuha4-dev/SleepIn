@@ -58,6 +58,13 @@ import {
   listenSystemThemeChange
 } from './theme.js';
 
+import {
+  parseScreenshotWithVisionAPI,
+  parseRawTimetableText,
+  convertRecordsToSleepInCsv
+} from './ocr-parser.js';
+
+
 // ---------------- App State ----------------
 const state = {
   activeTimetable: null,
@@ -588,6 +595,376 @@ function bindEvents() {
       await refreshAll();
       showFluidCloudToast('保存成功', '课程已强制保存');
     }
+  });
+
+  // Initialize Screenshot to CSV Feature
+  initScreenshotCsvFeature();
+}
+
+// ---------------- Screenshot & OCR to CSV Feature ----------------
+function initScreenshotCsvFeature() {
+  let currentScreenshotBase64 = null;
+  const modal = document.getElementById('screenshot-csv-modal');
+  const openBtn = document.getElementById('btn-open-screenshot-csv');
+  const closeBtn = document.getElementById('btn-close-screenshot-csv');
+
+  if (!modal || !openBtn) return;
+
+  // Open & Close
+  openBtn.addEventListener('click', () => {
+    modal.classList.add('visible');
+    // Load config from localStorage
+    document.getElementById('cfg-vision-api-key').value = localStorage.getItem('sleepin_vision_api_key') || '';
+    document.getElementById('cfg-vision-endpoint').value = localStorage.getItem('sleepin_vision_endpoint') || 'https://api.openai.com/v1/chat/completions';
+    document.getElementById('cfg-vision-model').value = localStorage.getItem('sleepin_vision_model') || 'gpt-4o-mini';
+  });
+
+  closeBtn.addEventListener('click', () => {
+    modal.classList.remove('visible');
+  });
+
+  // Tab switching
+  const tabImage = document.getElementById('tab-btn-image-mode');
+  const tabText = document.getElementById('tab-btn-text-mode');
+  const panelImage = document.getElementById('panel-image-mode');
+  const panelText = document.getElementById('panel-text-mode');
+
+  tabImage.addEventListener('click', () => {
+    tabImage.className = 'btn btn-sm btn-primary';
+    tabText.className = 'btn btn-sm btn-outlined';
+    panelImage.style.display = 'flex';
+    panelText.style.display = 'none';
+  });
+
+  tabText.addEventListener('click', () => {
+    tabText.className = 'btn btn-sm btn-primary';
+    tabImage.className = 'btn btn-sm btn-outlined';
+    panelText.style.display = 'flex';
+    panelImage.style.display = 'none';
+  });
+
+  // Drag & drop file selection
+  const dropzone = document.getElementById('dropzone-screenshot');
+  const fileInput = document.getElementById('input-screenshot-file');
+  const previewBox = document.getElementById('dropzone-preview');
+  const promptBox = document.getElementById('dropzone-prompt');
+  const previewImg = document.getElementById('img-screenshot-preview');
+  const reselectBtn = document.getElementById('btn-reselect-image');
+
+  dropzone.addEventListener('click', (e) => {
+    if (e.target !== reselectBtn) {
+      fileInput.click();
+    }
+  });
+
+  reselectBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fileInput.click();
+  });
+
+  dropzone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropzone.style.borderColor = 'var(--primary)';
+  });
+
+  dropzone.addEventListener('dragleave', () => {
+    dropzone.style.borderColor = 'var(--outline)';
+  });
+
+  dropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropzone.style.borderColor = 'var(--outline)';
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleImageFile(e.dataTransfer.files[0]);
+    }
+  });
+
+  fileInput.addEventListener('change', (e) => {
+    if (e.target.files && e.target.files[0]) {
+      handleImageFile(e.target.files[0]);
+    }
+  });
+
+  // Paste image directly (Ctrl+V)
+  window.addEventListener('paste', (e) => {
+    if (!modal.classList.contains('visible')) return;
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) {
+          handleImageFile(file);
+          showFluidCloudToast('已粘贴截图', '检测到剪贴板图片并载入');
+          break;
+        }
+      }
+    }
+  });
+
+  function handleImageFile(file) {
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      currentScreenshotBase64 = evt.target.result;
+      previewImg.src = currentScreenshotBase64;
+      promptBox.style.display = 'none';
+      previewBox.style.display = 'block';
+    };
+    reader.readAsDataURL(file);
+  }
+
+  // Save config on change
+  document.getElementById('cfg-vision-api-key').addEventListener('input', (e) => {
+    localStorage.setItem('sleepin_vision_api_key', e.target.value.trim());
+  });
+  document.getElementById('cfg-vision-endpoint').addEventListener('input', (e) => {
+    localStorage.setItem('sleepin_vision_endpoint', e.target.value.trim());
+  });
+  document.getElementById('cfg-vision-model').addEventListener('input', (e) => {
+    localStorage.setItem('sleepin_vision_model', e.target.value.trim());
+  });
+
+  // Start Vision Parse
+  const parseBtn = document.getElementById('btn-start-vision-parse');
+  parseBtn.addEventListener('click', async () => {
+    if (!currentScreenshotBase64) {
+      alert('请先上传或粘贴课表截图！');
+      return;
+    }
+
+    const apiKey = document.getElementById('cfg-vision-api-key').value.trim();
+    if (!apiKey) {
+      alert('请先展开【AI 视觉模型接口配置】填写您的 API Key！\n（支持任何兼容 OpenAI 格式的 Vision 接口，如 gpt-4o-mini、Gemini 等）');
+      return;
+    }
+
+    const endpoint = document.getElementById('cfg-vision-endpoint').value.trim();
+    const model = document.getElementById('cfg-vision-model').value.trim();
+
+    parseBtn.disabled = true;
+    const originalText = parseBtn.innerHTML;
+    parseBtn.innerHTML = '<span>⏳ 正在调用 AI 视觉大模型深度识别中，请稍候...</span>';
+
+    try {
+      const records = await parseScreenshotWithVisionAPI({
+        imageBase64: currentScreenshotBase64,
+        apiKey,
+        endpoint,
+        model
+      });
+
+      renderParsedTable(records);
+      showFluidCloudToast('识别完成', `成功识别出 ${records.length} 条课程时段！`);
+    } catch (err) {
+      alert(`识别失败：${err.message}`);
+    } finally {
+      parseBtn.disabled = false;
+      parseBtn.innerHTML = originalText;
+    }
+  });
+
+  // Start Text Parse
+  const textParseBtn = document.getElementById('btn-start-text-parse');
+  textParseBtn.addEventListener('click', () => {
+    const rawText = document.getElementById('input-raw-timetable-text').value.trim();
+    if (!rawText) {
+      alert('请先粘贴课表文本内容！');
+      return;
+    }
+
+    const records = parseRawTimetableText(rawText);
+    if (records.length === 0) {
+      alert('未能从文本中匹配到符合规范的星期或节次信息，请检查格式或切换到截图识别');
+      return;
+    }
+
+    renderParsedTable(records);
+    showFluidCloudToast('提取完成', `成功提取出 ${records.length} 条课程时段！`);
+  });
+
+  // Render & Edit Table
+  const tbody = document.getElementById('parsed-records-tbody');
+  const countBadge = document.getElementById('parsed-count-badge');
+  const wrapper = document.getElementById('parsed-results-wrapper');
+  const footerActions = document.getElementById('parsed-footer-actions');
+
+  function renderParsedTable(records) {
+    tbody.innerHTML = '';
+    countBadge.textContent = records.length;
+    wrapper.style.display = 'block';
+    footerActions.style.display = 'flex';
+
+    records.forEach(r => addParsedRowToTable(r));
+  }
+
+  function addParsedRowToTable(r = {}) {
+    const tr = document.createElement('tr');
+    tr.style.borderBottom = '1px solid var(--outline-variant)';
+
+    const day = r.dayOfWeek || 1;
+    const dayOptions = [1, 2, 3, 4, 5, 6, 7].map(d => `
+      <option value="${d}" ${d === day ? 'selected' : ''}>${DAY_NAMES[d - 1]}</option>
+    `).join('');
+
+    tr.innerHTML = `
+      <td style="padding: 4px;">
+        <input type="text" class="p-name form-control" style="height: 32px; font-size: 0.75rem; padding: 2px 6px;" value="${r.name || ''}" placeholder="课程名">
+      </td>
+      <td style="padding: 4px;">
+        <select class="p-day form-control" style="height: 32px; font-size: 0.75rem; padding: 2px 4px;">
+          ${dayOptions}
+        </select>
+      </td>
+      <td style="padding: 4px; white-space: nowrap;">
+        <input type="number" class="p-start-period form-control" style="display:inline-block; width: 36px; height: 32px; font-size: 0.75rem; padding: 2px 4px;" min="1" max="15" value="${r.startPeriod || 1}">
+        -
+        <input type="number" class="p-end-period form-control" style="display:inline-block; width: 36px; height: 32px; font-size: 0.75rem; padding: 2px 4px;" min="1" max="15" value="${r.endPeriod || 2}">
+      </td>
+      <td style="padding: 4px;">
+        <input type="text" class="p-weeks form-control" style="height: 32px; font-size: 0.75rem; padding: 2px 6px; width: 80px;" value="${r.weeks || 'ALL'}" placeholder="1-16">
+      </td>
+      <td style="padding: 4px;">
+        <input type="text" class="p-location form-control" style="height: 32px; font-size: 0.75rem; padding: 2px 6px;" value="${r.location || ''}" placeholder="教室">
+      </td>
+      <td style="padding: 4px;">
+        <input type="text" class="p-teacher form-control" style="height: 32px; font-size: 0.75rem; padding: 2px 6px;" value="${r.teacher || ''}" placeholder="教师">
+      </td>
+      <td style="padding: 4px; text-align: center;">
+        <button type="button" class="btn btn-sm btn-danger p-del-btn" style="height: 28px; width: 28px; padding: 0;">✕</button>
+      </td>
+    `;
+
+    tr.querySelector('.p-del-btn').addEventListener('click', () => {
+      tr.remove();
+      countBadge.textContent = tbody.children.length;
+    });
+
+    tbody.appendChild(tr);
+    countBadge.textContent = tbody.children.length;
+  }
+
+  // Add empty row
+  document.getElementById('btn-add-parsed-row').addEventListener('click', () => {
+    addParsedRowToTable({
+      name: '',
+      dayOfWeek: 1,
+      startPeriod: 1,
+      endPeriod: 2,
+      weeks: 'ALL',
+      location: '',
+      teacher: ''
+    });
+  });
+
+  function getRecordsFromTable() {
+    const rows = Array.from(tbody.children);
+    const records = [];
+
+    rows.forEach(tr => {
+      const name = tr.querySelector('.p-name').value.trim();
+      if (!name) return;
+      const day = parseInt(tr.querySelector('.p-day').value, 10);
+      const startP = parseInt(tr.querySelector('.p-start-period').value, 10) || 1;
+      const endP = parseInt(tr.querySelector('.p-end-period').value, 10) || startP;
+      const weeks = tr.querySelector('.p-weeks').value.trim() || 'ALL';
+      const location = tr.querySelector('.p-location').value.trim();
+      const teacher = tr.querySelector('.p-teacher').value.trim();
+
+      records.push({
+        name,
+        dayOfWeek: day,
+        startPeriod: startP,
+        endPeriod: endP,
+        weeks,
+        location,
+        teacher
+      });
+    });
+
+    return records;
+  }
+
+  // Export to CSV
+  document.getElementById('btn-download-parsed-csv').addEventListener('click', () => {
+    const records = getRecordsFromTable();
+    if (records.length === 0) {
+      alert('表格中暂无有效课程数据！');
+      return;
+    }
+
+    const csvStr = convertRecordsToSleepInCsv(records);
+    downloadFile('课表识别导出.csv', 'text/csv;charset=utf-8', csvStr);
+    showFluidCloudToast('导出成功', '已生成并下载 SleepIn 标准 CSV 课表文件！');
+  });
+
+  // Import to Active Timetable
+  document.getElementById('btn-import-parsed-to-active').addEventListener('click', async () => {
+    if (!state.activeTimetable) {
+      alert('请先选择或创建一个当前激活的课程表！');
+      return;
+    }
+
+    const records = getRecordsFromTable();
+    if (records.length === 0) {
+      alert('表格中暂无有效课程数据！');
+      return;
+    }
+
+    if (!confirm(`确认将这 ${records.length} 条课程时段直接导入到【${state.activeTimetable.name}】中吗？`)) {
+      return;
+    }
+
+    // Convert and import
+    const csvStr = convertRecordsToSleepInCsv(records);
+    const periods = await getPeriodsBySchedule(state.activeTimetable.scheduleId);
+    const maxPeriod = periods.length > 0 ? periods[periods.length - 1].periodNumber : 15;
+
+    const { rows, errors } = parseCourseCsv(csvStr, state.totalWeeks, maxPeriod);
+    if (errors.length > 0) {
+      alert(`导入校验存在问题：\n${errors.map(e => e.message).join('\n')}`);
+      return;
+    }
+
+    // Group by course name
+    const grouped = {};
+    rows.forEach(r => {
+      const key = r.name.toLowerCase();
+      if (!grouped[key]) {
+        grouped[key] = {
+          name: r.name,
+          teacher: r.teacher,
+          sessions: []
+        };
+      }
+      grouped[key].sessions.push({
+        dayOfWeek: r.dayOfWeek,
+        startPeriod: r.startPeriod,
+        endPeriod: r.endPeriod,
+        location: r.location,
+        weekType: r.weekType,
+        startWeek: r.startWeek,
+        endWeek: r.endWeek,
+        customWeeks: r.customWeeks
+      });
+    });
+
+    let colorIdx = 0;
+    for (const k in grouped) {
+      const item = grouped[k];
+      const color = DEFAULT_COURSE_COLORS[colorIdx % DEFAULT_COURSE_COLORS.length];
+      colorIdx++;
+      await saveCourseWithSessions({
+        timetableId: state.activeTimetable.id,
+        name: item.name,
+        teacher: item.teacher,
+        color,
+        note: '截图智能导入'
+      }, item.sessions);
+    }
+
+    modal.classList.remove('visible');
+    await refreshAll();
+    showFluidCloudToast('导入成功', `成功将 ${Object.keys(grouped).length} 门课程导入到当前课表！`);
   });
 }
 
