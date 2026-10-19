@@ -63,8 +63,11 @@ export async function getDB() {
   });
 }
 
-function tx(storeNames, mode = 'readonly') {
-  return dbInstance.transaction(storeNames, mode);
+export function formatLocalDate(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 // ----------------- Standard 14 Periods Definition -----------------
@@ -89,9 +92,22 @@ export const STANDARD_14_PERIODS = [
   { periodNumber: 14, startTime: '21:15', endTime: '22:00' }
 ];
 
+export const DEFAULT_MAX_PERIOD = STANDARD_14_PERIODS.length;
+
+const DEFAULT_SETTINGS = Object.freeze({
+  notificationsEnabled: true,
+  reminderMinutes: 10,
+  fluidCloudEnabled: true,
+  themeMode: 'SYSTEM',
+  dynamicColorEnabled: true,
+  courseCellHeightDp: 88,
+  showNonCurrentWeekCourses: true,
+  autoCheckUpdateEnabled: true
+});
+
 // ----------------- Seeding -----------------
 export async function seedInitialDataIfNeeded() {
-  const db = await getDB();
+  await getDB();
   const schedules = await getAllSchedules();
 
   if (schedules.length === 0) {
@@ -101,25 +117,18 @@ export async function seedInitialDataIfNeeded() {
       createdAt: Date.now()
     });
 
-    for (const p of STANDARD_14_PERIODS) {
-      await addSchedulePeriod({
-        scheduleId,
-        periodNumber: p.periodNumber,
-        startTime: p.startTime,
-        endTime: p.endTime
-      });
-    }
+    await replaceSchedulePeriods(scheduleId, STANDARD_14_PERIODS);
 
-    // 2. Calculate semester start date (Monday of current semester)
+    // 2. Calculate semester start date (Monday of current semester in local timezone)
     const today = new Date();
     const day = today.getDay(); // 0 is Sunday
     const diffToMonday = (day === 0 ? -6 : 1) - day;
     const mondayThisWeek = new Date(today);
     mondayThisWeek.setDate(today.getDate() + diffToMonday);
-    // Let's set start date 4 weeks ago so we are nicely in week 5 of the semester!
+    // Set start date 4 weeks ago so we are in week 5 of the semester
     const semesterStart = new Date(mondayThisWeek);
     semesterStart.setDate(mondayThisWeek.getDate() - 28);
-    const startDateStr = semesterStart.toISOString().split('T')[0];
+    const startDateStr = formatLocalDate(semesterStart);
 
     // 3. Seed Default Timetable
     const timetableId = await addTimetable({
@@ -134,7 +143,6 @@ export async function seedInitialDataIfNeeded() {
     });
 
     // 4. Seed Realistic Sample Courses
-    // Colors matching DefaultCourseColors
     const sampleCourses = [
       {
         name: '高等数学 (II)',
@@ -211,7 +219,7 @@ export async function seedInitialDataIfNeeded() {
       const defaultSch = schedules.find(s => s.name === '默认作息') || schedules[0];
       if (defaultSch) {
         const existingPeriods = await getPeriodsBySchedule(defaultSch.id);
-        if (existingPeriods.length < 14) {
+        if (existingPeriods.length < DEFAULT_MAX_PERIOD) {
           await replaceSchedulePeriods(defaultSch.id, STANDARD_14_PERIODS);
         }
       }
@@ -220,76 +228,68 @@ export async function seedInitialDataIfNeeded() {
     }
   }
 
-  // 5. Initialize Settings
+  // 5. Initialize or Migrate Settings (Once at startup, keeping getSettings pure)
   const settings = await getSettings();
-  if (!settings || Object.keys(settings).length === 0) {
-    await updateSettings({
-      notificationsEnabled: true,
-      reminderMinutes: 10,
-      fluidCloudEnabled: true,
-      themeMode: 'SYSTEM',
-      dynamicColorEnabled: true,
-      courseCellHeightDp: 88,
-      showNonCurrentWeekCourses: true,
-      autoCheckUpdateEnabled: true
-    });
+  try {
+    if (!localStorage.getItem('sleepin_cell_height_upgraded_v2') && (!settings.courseCellHeightDp || settings.courseCellHeightDp <= 68)) {
+      localStorage.setItem('sleepin_cell_height_upgraded_v2', 'true');
+      await updateSettings({ courseCellHeightDp: 88 });
+    } else {
+      await updateSettings(settings);
+    }
+  } catch (e) {
+    await updateSettings(settings);
   }
 }
 
 // ----------------- Settings Store -----------------
+function readSettingsFallbackFromLocalStorage() {
+  try {
+    const raw = localStorage.getItem('sleepin_app_settings');
+    if (raw) {
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    }
+  } catch (e) {}
+  return { ...DEFAULT_SETTINGS };
+}
+
 export async function getSettings() {
-  const db = await getDB();
-  return new Promise((resolve) => {
-    const transaction = db.transaction('settings', 'readonly');
-    const store = transaction.objectStore('settings');
-    const request = store.get('app_settings');
-    request.onsuccess = () => {
-      const defaultSettings = {
-        notificationsEnabled: true,
-        reminderMinutes: 10,
-        fluidCloudEnabled: true,
-        themeMode: 'SYSTEM',
-        dynamicColorEnabled: true,
-        courseCellHeightDp: 88,
-        showNonCurrentWeekCourses: true,
-        autoCheckUpdateEnabled: true
+  try {
+    const db = await getDB();
+    return await new Promise((resolve) => {
+      const transaction = db.transaction('settings', 'readonly');
+      const store = transaction.objectStore('settings');
+      const request = store.get('app_settings');
+      request.onsuccess = () => {
+        const val = request.result?.value;
+        if (!val) {
+          resolve(readSettingsFallbackFromLocalStorage());
+          return;
+        }
+        resolve({ ...DEFAULT_SETTINGS, ...val });
       };
-
-      const val = request.result?.value;
-      if (!val) {
-        resolve(defaultSettings);
-        return;
-      }
-
-      // 如果是旧版本的 68px 挤压高度，自动升级为舒适的 88px 可滚动高度
-      if (!localStorage.getItem('sleepin_cell_height_upgraded_v2') && (!val.courseCellHeightDp || val.courseCellHeightDp <= 68)) {
-        val.courseCellHeightDp = 88;
-        localStorage.setItem('sleepin_cell_height_upgraded_v2', 'true');
-        updateSettings({ courseCellHeightDp: 88 }).catch(console.error);
-      }
-
-      resolve({ ...defaultSettings, ...val });
-    };
-    request.onerror = () => resolve({});
-  });
+      request.onerror = () => resolve(readSettingsFallbackFromLocalStorage());
+    });
+  } catch (e) {
+    return readSettingsFallbackFromLocalStorage();
+  }
 }
 
 export async function updateSettings(newSettings) {
-  const db = await getDB();
   const current = await getSettings();
-  const merged = { ...current, ...newSettings };
+  const merged = { ...DEFAULT_SETTINGS, ...current, ...newSettings };
+  try {
+    localStorage.setItem('sleepin_app_settings', JSON.stringify(merged));
+  } catch (e) {}
+
+  const db = await getDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction('settings', 'readwrite');
     const store = transaction.objectStore('settings');
-    const request = store.put({ key: 'app_settings', value: merged });
-    request.onsuccess = () => {
-      // Also sync to localStorage for redundancy
-      try {
-        localStorage.setItem('sleepin_app_settings', JSON.stringify(merged));
-      } catch (e) {}
-      resolve(merged);
-    };
-    request.onerror = () => reject(request.error);
+    store.put({ key: 'app_settings', value: merged });
+    transaction.oncomplete = () => resolve(merged);
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('Settings transaction aborted'));
   });
 }
 
@@ -344,19 +344,27 @@ export async function updateTimetable(timetable) {
 }
 
 export async function setActiveTimetable(timetableId) {
-  const timetables = await getAllTimetables();
   const db = await getDB();
-  const transaction = db.transaction('timetables', 'readwrite');
-  const store = transaction.objectStore('timetables');
-
-  for (const t of timetables) {
-    t.isActive = (t.id === Number(timetableId));
-    store.put(t);
-  }
-
+  const targetId = Number(timetableId);
   return new Promise((resolve, reject) => {
+    const transaction = db.transaction('timetables', 'readwrite');
+    const store = transaction.objectStore('timetables');
+    const getAllReq = store.getAll();
+
+    getAllReq.onsuccess = () => {
+      const timetables = getAllReq.result || [];
+      for (const t of timetables) {
+        const shouldBeActive = (t.id === targetId);
+        if (t.isActive !== shouldBeActive) {
+          t.isActive = shouldBeActive;
+          store.put(t);
+        }
+      }
+    };
+
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('setActiveTimetable aborted'));
   });
 }
 
@@ -364,18 +372,33 @@ export async function deleteTimetable(timetableId) {
   const db = await getDB();
   const tid = Number(timetableId);
 
-  // Cascade delete courses and sessions
-  const courses = await getCoursesByTimetable(tid);
-  for (const c of courses) {
-    await deleteCourse(c.id);
-  }
-
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction('timetables', 'readwrite');
-    const store = transaction.objectStore('timetables');
-    const request = store.delete(tid);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
+    const transaction = db.transaction(['timetables', 'courses', 'course_sessions'], 'readwrite');
+    const ttStore = transaction.objectStore('timetables');
+    const cStore = transaction.objectStore('courses');
+    const csStore = transaction.objectStore('course_sessions');
+    const cIndex = cStore.index('timetableId');
+    const csIndex = csStore.index('courseId');
+
+    ttStore.delete(tid);
+
+    const coursesReq = cIndex.getAll(tid);
+    coursesReq.onsuccess = () => {
+      const courses = coursesReq.result || [];
+      for (const c of courses) {
+        cStore.delete(c.id);
+        const sessionsReq = csIndex.getAll(c.id);
+        sessionsReq.onsuccess = () => {
+          for (const s of (sessionsReq.result || [])) {
+            csStore.delete(s.id);
+          }
+        };
+      }
+    };
+
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('deleteTimetable aborted'));
   });
 }
 
@@ -428,23 +451,24 @@ export async function deleteSchedule(scheduleId) {
   const sid = Number(scheduleId);
   const db = await getDB();
 
-  // Delete all periods for this schedule
-  const periods = await getPeriodsBySchedule(sid);
-  const pTx = db.transaction('schedule_periods', 'readwrite');
-  const pStore = pTx.objectStore('schedule_periods');
-  for (const p of periods) {
-    pStore.delete(p.id);
-  }
-
   return new Promise((resolve, reject) => {
-    pTx.oncomplete = () => {
-      const sTx = db.transaction('schedules', 'readwrite');
-      const sStore = sTx.objectStore('schedules');
-      const req = sStore.delete(sid);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
+    const transaction = db.transaction(['schedules', 'schedule_periods'], 'readwrite');
+    const sStore = transaction.objectStore('schedules');
+    const pStore = transaction.objectStore('schedule_periods');
+    const pIndex = pStore.index('scheduleId');
+
+    sStore.delete(sid);
+
+    const periodsReq = pIndex.getAll(sid);
+    periodsReq.onsuccess = () => {
+      for (const p of (periodsReq.result || [])) {
+        pStore.delete(p.id);
+      }
     };
-    pTx.onerror = () => reject(pTx.error);
+
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('deleteSchedule aborted'));
   });
 }
 
@@ -478,25 +502,31 @@ export async function addSchedulePeriod(period) {
 
 export async function replaceSchedulePeriods(scheduleId, periods) {
   const db = await getDB();
-  const existing = await getPeriodsBySchedule(scheduleId);
-  const transaction = db.transaction('schedule_periods', 'readwrite');
-  const store = transaction.objectStore('schedule_periods');
-
-  for (const ex of existing) {
-    store.delete(ex.id);
-  }
-  for (const p of periods) {
-    store.add({
-      scheduleId: Number(scheduleId),
-      periodNumber: p.periodNumber,
-      startTime: p.startTime,
-      endTime: p.endTime
-    });
-  }
+  const sid = Number(scheduleId);
 
   return new Promise((resolve, reject) => {
+    const transaction = db.transaction('schedule_periods', 'readwrite');
+    const store = transaction.objectStore('schedule_periods');
+    const index = store.index('scheduleId');
+
+    const getReq = index.getAll(sid);
+    getReq.onsuccess = () => {
+      for (const ex of (getReq.result || [])) {
+        store.delete(ex.id);
+      }
+      for (const p of periods) {
+        store.add({
+          scheduleId: sid,
+          periodNumber: p.periodNumber,
+          startTime: p.startTime,
+          endTime: p.endTime
+        });
+      }
+    };
+
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('replaceSchedulePeriods aborted'));
   });
 }
 
@@ -526,13 +556,41 @@ export async function getSessionsByCourse(courseId) {
 }
 
 export async function getCoursesWithSessions(timetableId) {
-  const courses = await getCoursesByTimetable(timetableId);
-  const result = [];
-  for (const c of courses) {
-    const sessions = await getSessionsByCourse(c.id);
-    result.push({ course: c, sessions });
-  }
-  return result;
+  const db = await getDB();
+  const tid = Number(timetableId);
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(['courses', 'course_sessions'], 'readonly');
+    const cStore = transaction.objectStore('courses');
+    const csStore = transaction.objectStore('course_sessions');
+    const cIndex = cStore.index('timetableId');
+    const csIndex = csStore.index('courseId');
+
+    const coursesReq = cIndex.getAll(tid);
+    coursesReq.onsuccess = () => {
+      const courses = coursesReq.result || [];
+      if (courses.length === 0) {
+        resolve([]);
+        return;
+      }
+
+      const result = new Array(courses.length);
+      let remaining = courses.length;
+
+      courses.forEach((course, idx) => {
+        const sReq = csIndex.getAll(course.id);
+        sReq.onsuccess = () => {
+          result[idx] = { course, sessions: sReq.result || [] };
+          remaining--;
+          if (remaining === 0) {
+            resolve(result);
+          }
+        };
+      });
+    };
+
+    transaction.onerror = () => reject(transaction.error);
+  });
 }
 
 export async function getCourseDetail(courseId) {
@@ -558,6 +616,20 @@ export async function getCourseDetail(courseId) {
   });
 }
 
+function buildSessionEntity(courseId, s) {
+  return {
+    courseId,
+    dayOfWeek: Number(s.dayOfWeek),
+    startPeriod: Number(s.startPeriod),
+    endPeriod: Number(s.endPeriod),
+    location: (s.location || '').trim(),
+    weekType: s.weekType || 'ALL',
+    startWeek: s.startWeek != null ? Number(s.startWeek) : null,
+    endWeek: s.endWeek != null ? Number(s.endWeek) : null,
+    customWeeks: Array.isArray(s.customWeeks) ? [...s.customWeeks] : []
+  };
+}
+
 export async function saveCourseWithSessions(courseData, sessionsData) {
   const db = await getDB();
   const transaction = db.transaction(['courses', 'course_sessions'], 'readwrite');
@@ -568,33 +640,32 @@ export async function saveCourseWithSessions(courseData, sessionsData) {
 
   return new Promise((resolve, reject) => {
     if (courseId) {
-      // Update existing course
-      cStore.put(courseData);
-      // Delete old sessions
-      const csIndex = csStore.index('courseId');
-      const getOldReq = csIndex.getAll(courseId);
-      getOldReq.onsuccess = () => {
-        (getOldReq.result || []).forEach(s => csStore.delete(s.id));
-        // Add new sessions
-        sessionsData.forEach(s => {
-          csStore.add({
-            courseId,
-            dayOfWeek: Number(s.dayOfWeek),
-            startPeriod: Number(s.startPeriod),
-            endPeriod: Number(s.endPeriod),
-            location: s.location || '',
-            weekType: s.weekType || 'ALL',
-            startWeek: s.startWeek != null ? Number(s.startWeek) : null,
-            endWeek: s.endWeek != null ? Number(s.endWeek) : null,
-            customWeeks: Array.isArray(s.customWeeks) ? s.customWeeks : []
-          });
+      const existingReq = cStore.get(courseId);
+      existingReq.onsuccess = () => {
+        const prev = existingReq.result || {};
+        cStore.put({
+          ...prev,
+          id: courseId,
+          timetableId: Number(courseData.timetableId),
+          name: (courseData.name || '').trim(),
+          teacher: courseData.teacher ? courseData.teacher.trim() : '',
+          color: courseData.color,
+          note: courseData.note ? courseData.note.trim() : '',
+          createdAt: prev.createdAt || courseData.createdAt || Date.now(),
+          updatedAt: Date.now()
         });
+
+        const csIndex = csStore.index('courseId');
+        const getOldReq = csIndex.getAll(courseId);
+        getOldReq.onsuccess = () => {
+          (getOldReq.result || []).forEach(s => csStore.delete(s.id));
+          sessionsData.forEach(s => csStore.add(buildSessionEntity(courseId, s)));
+        };
       };
     } else {
-      // Add new course
       const addReq = cStore.add({
         timetableId: Number(courseData.timetableId),
-        name: courseData.name.trim(),
+        name: (courseData.name || '').trim(),
         teacher: courseData.teacher ? courseData.teacher.trim() : '',
         color: courseData.color,
         note: courseData.note ? courseData.note.trim() : '',
@@ -603,24 +674,13 @@ export async function saveCourseWithSessions(courseData, sessionsData) {
 
       addReq.onsuccess = () => {
         courseId = addReq.result;
-        sessionsData.forEach(s => {
-          csStore.add({
-            courseId,
-            dayOfWeek: Number(s.dayOfWeek),
-            startPeriod: Number(s.startPeriod),
-            endPeriod: Number(s.endPeriod),
-            location: s.location || '',
-            weekType: s.weekType || 'ALL',
-            startWeek: s.startWeek != null ? Number(s.startWeek) : null,
-            endWeek: s.endWeek != null ? Number(s.endWeek) : null,
-            customWeeks: Array.isArray(s.customWeeks) ? s.customWeeks : []
-          });
-        });
+        sessionsData.forEach(s => csStore.add(buildSessionEntity(courseId, s)));
       };
     }
 
     transaction.oncomplete = () => resolve(courseId);
     transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('saveCourseWithSessions aborted'));
   });
 }
 
@@ -641,31 +701,42 @@ export async function deleteCourse(courseId) {
   return new Promise((resolve, reject) => {
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('deleteCourse aborted'));
   });
 }
 
 // ----------------- Full Backup & Restore -----------------
 export async function exportFullBackupJSON() {
   const settings = await getSettings();
-  const timetables = await getAllTimetables();
-  const schedules = await getAllSchedules();
-  
-  const schedulePeriods = [];
-  for (const s of schedules) {
-    const periods = await getPeriodsBySchedule(s.id);
-    schedulePeriods.push(...periods);
-  }
+  const db = await getDB();
 
-  const courses = [];
-  const sessions = [];
-  for (const t of timetables) {
-    const tCourses = await getCoursesByTimetable(t.id);
-    for (const c of tCourses) {
-      courses.push(c);
-      const cSessions = await getSessionsByCourse(c.id);
-      sessions.push(...cSessions);
+  const { timetables, schedules, schedulePeriods, courses, sessions } = await new Promise((resolve, reject) => {
+    const transaction = db.transaction(
+      ['timetables', 'schedules', 'schedule_periods', 'courses', 'course_sessions'],
+      'readonly'
+    );
+    const data = {};
+
+    const stores = [
+      ['timetables', 'timetables'],
+      ['schedules', 'schedules'],
+      ['schedulePeriods', 'schedule_periods'],
+      ['courses', 'courses'],
+      ['sessions', 'course_sessions']
+    ];
+
+    for (const [key, storeName] of stores) {
+      const req = transaction.objectStore(storeName).getAll();
+      req.onsuccess = () => {
+        data[key] = req.result || [];
+      };
     }
-  }
+
+    transaction.oncomplete = () => resolve(data);
+    transaction.onerror = () => reject(transaction.error);
+  });
+
+  schedulePeriods.sort((a, b) => (a.scheduleId - b.scheduleId) || (a.periodNumber - b.periodNumber));
 
   const backup = {
     version: 2,
@@ -701,6 +772,9 @@ export async function importFullBackupJSON(jsonString) {
 
   if (data.settings) {
     tx.objectStore('settings').put({ key: 'app_settings', value: data.settings });
+    try {
+      localStorage.setItem('sleepin_app_settings', JSON.stringify(data.settings));
+    } catch (e) {}
   }
 
   data.schedules.forEach(s => tx.objectStore('schedules').put(s));
@@ -712,5 +786,6 @@ export async function importFullBackupJSON(jsonString) {
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error('importFullBackupJSON aborted'));
   });
 }

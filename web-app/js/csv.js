@@ -121,14 +121,19 @@ export function parseCourseCsv(rawCsv, totalWeeks, maxPeriod) {
 }
 
 function parseWeeksSpec(spec, totalWeeks) {
-  const norm = spec.trim();
+  const norm = spec
+    .trim()
+    .replace(/[，,；]/g, ';')
+    .replace(/（/g, '(')
+    .replace(/）/g, ')')
+    .replace(/周/g, '');
   if (!norm) throw new Error('周次不能为空');
   if (norm.toUpperCase() === 'ALL') {
     return { weekType: 'ALL', startWeek: null, endWeek: null, customWeeks: [] };
   }
 
   const rangePattern = /^\s*(\d+)\s*-\s*(\d+)\s*$/;
-  const parityRangePattern = /^\s*(\d+)\s*-\s*(\d+)\s*\((odd|even)\)\s*$/i;
+  const parityRangePattern = /^\s*(\d+)\s*-\s*(\d+)\s*\((odd|even|单|双)\)\s*$/i;
 
   if (!norm.includes(';')) {
     const rangeMatch = norm.match(rangePattern);
@@ -136,7 +141,7 @@ function parseWeeksSpec(spec, totalWeeks) {
       const start = parseInt(rangeMatch[1], 10);
       const end = parseInt(rangeMatch[2], 10);
       if (start < 1 || end > totalWeeks || start > end) {
-        throw new Error(`周数范围无效: ${start}-${end}`);
+        throw new Error(`周数范围无效: ${start}-${end} (总周数 1-${totalWeeks})`);
       }
       return { weekType: 'RANGE', startWeek: start, endWeek: end, customWeeks: [] };
     }
@@ -151,10 +156,14 @@ function parseWeeksSpec(spec, totalWeeks) {
     if (pMatch) {
       const start = parseInt(pMatch[1], 10);
       const end = parseInt(pMatch[2], 10);
-      const parity = pMatch[3].toLowerCase();
+      if (start < 1 || end > totalWeeks || start > end) {
+        throw new Error(`周数范围无效: ${token}`);
+      }
+      const rawParity = pMatch[3].toLowerCase();
+      const isOdd = (rawParity === 'odd' || rawParity === '单');
       for (let w = start; w <= end; w++) {
-        if ((parity === 'odd' && w % 2 === 1) || (parity === 'even' && w % 2 === 0)) {
-          if (w >= 1 && w <= totalWeeks) customSet.add(w);
+        if ((isOdd && w % 2 === 1) || (!isOdd && w % 2 === 0)) {
+          customSet.add(w);
         }
       }
       continue;
@@ -164,16 +173,28 @@ function parseWeeksSpec(spec, totalWeeks) {
     if (rMatch) {
       const start = parseInt(rMatch[1], 10);
       const end = parseInt(rMatch[2], 10);
+      if (start < 1 || end > totalWeeks || start > end) {
+        throw new Error(`周数范围无效: ${token}`);
+      }
       for (let w = start; w <= end; w++) {
-        if (w >= 1 && w <= totalWeeks) customSet.add(w);
+        customSet.add(w);
       }
       continue;
     }
 
-    const single = parseInt(token, 10);
-    if (!isNaN(single) && single >= 1 && single <= totalWeeks) {
-      customSet.add(single);
+    if (/^\d+$/.test(token)) {
+      const single = parseInt(token, 10);
+      if (single >= 1 && single <= totalWeeks) {
+        customSet.add(single);
+        continue;
+      }
     }
+
+    throw new Error(`无法识别或超出范围的周次配置: "${token}"`);
+  }
+
+  if (customSet.size === 0) {
+    throw new Error(`周次配置未包含有效周数: "${spec}"`);
   }
 
   const sortedCustom = Array.from(customSet).sort((a, b) => a - b);
@@ -205,7 +226,7 @@ export function exportCourseCsv(coursesWithSessions, totalWeeks) {
       if (sess.weekType === 'RANGE') {
         weeksSpec = `${sess.startWeek || 1}-${sess.endWeek || totalWeeks}`;
       } else if (sess.weekType === 'CUSTOM') {
-        weeksSpec = (sess.customWeeks || []).sort((a, b) => a - b).join(';');
+        weeksSpec = [...(sess.customWeeks || [])].sort((a, b) => a - b).join(';');
       }
 
       const fields = [
@@ -291,8 +312,8 @@ export function exportScheduleCsv(scheduleName, periods) {
     ['作息表名称', '节次', '开始时间', '结束时间'].map(encodeCsvField).join(',')
   ];
 
-  periods.sort((a, b) => a.periodNumber - b.periodNumber);
-  for (const p of periods) {
+  const sortedPeriods = [...periods].sort((a, b) => a.periodNumber - b.periodNumber);
+  for (const p of sortedPeriods) {
     rows.push([scheduleName, p.periodNumber, p.startTime, p.endTime].map(encodeCsvField).join(','));
   }
 

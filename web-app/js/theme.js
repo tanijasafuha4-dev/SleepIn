@@ -33,12 +33,13 @@ export function hexToIntColor(hexStr) {
 }
 
 export function getContrastTextColor(hexColor) {
-  const hex = hexColor.replace('#', '');
-  const r = parseInt(hex.substr(0, 2), 16);
-  const g = parseInt(hex.substr(2, 2), 16);
-  const b = parseInt(hex.substr(4, 2), 16);
+  const hex = String(hexColor || '#4A90D9').replace('#', '');
+  if (hex.length !== 6) return '#FFFFFF';
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
   const yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
-  return (yiq >= 140) ? '#1E293B' : '#FFFFFF';
+  return (yiq >= 165) ? '#1E293B' : '#FFFFFF';
 }
 
 export function applyTheme(themeMode = 'SYSTEM') {

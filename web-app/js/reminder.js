@@ -4,11 +4,12 @@
  * and In-App Dynamic Island / Fluid Cloud Toast.
  */
 
-import { getSettings, getActiveTimetable, getScheduleById, getPeriodsBySchedule, getCoursesWithSessions } from './db.js';
+import { getSettings, getActiveTimetable, getPeriodsBySchedule, getCoursesWithSessions, formatLocalDate } from './db.js';
 import { resolveWeeks } from './conflict.js';
 
 let audioContext = null;
 let reminderAudio = null;
+let lastCheckedDateStr = '';
 const notifiedSessionsToday = new Set(); // Key: `${dateStr}_${courseId}_${sessionId}`
 
 export function initAudio() {
@@ -94,7 +95,7 @@ export async function requestNotificationPermission() {
 }
 
 /**
- * Displays in-app Dynamic Island / Fluid Cloud toast.
+ * Displays in-app Dynamic Island / Fluid Cloud toast safely (XSS-safe).
  */
 export function showFluidCloudToast(title, body, duration = 6000) {
   let container = document.getElementById('fluid-cloud-container');
@@ -107,13 +108,26 @@ export function showFluidCloudToast(title, body, duration = 6000) {
 
   const toast = document.createElement('div');
   toast.className = 'fluid-cloud-pill';
-  toast.innerHTML = `
-    <div class="fluid-cloud-icon">🔔</div>
-    <div class="fluid-cloud-content">
-      <div class="fluid-cloud-title">${title}</div>
-      <div class="fluid-cloud-body">${body}</div>
-    </div>
-  `;
+
+  const iconEl = document.createElement('div');
+  iconEl.className = 'fluid-cloud-icon';
+  iconEl.textContent = '🔔';
+
+  const contentEl = document.createElement('div');
+  contentEl.className = 'fluid-cloud-content';
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'fluid-cloud-title';
+  titleEl.textContent = title;
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'fluid-cloud-body';
+  bodyEl.textContent = body;
+
+  contentEl.appendChild(titleEl);
+  contentEl.appendChild(bodyEl);
+  toast.appendChild(iconEl);
+  toast.appendChild(contentEl);
 
   container.appendChild(toast);
 
@@ -139,7 +153,12 @@ export async function checkReminders() {
   if (!activeTimetable) return;
 
   const now = new Date();
-  const todayStr = now.toISOString().split('T')[0];
+  const todayStr = formatLocalDate(now);
+
+  if (todayStr !== lastCheckedDateStr) {
+    notifiedSessionsToday.clear();
+    lastCheckedDateStr = todayStr;
+  }
 
   // Calculate current semester week
   const startDate = new Date(activeTimetable.startDate + 'T00:00:00');
@@ -174,19 +193,17 @@ export async function checkReminders() {
       const [h, m] = firstPeriod.startTime.split(':').map(Number);
       const classStartTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
 
-      // Reminder trigger time: classStartTime - reminderMinutes
+      // Reminder trigger window: [classStartTime - reminderMinutes, classStartTime)
       const reminderTime = new Date(classStartTime.getTime() - reminderMinutes * 60 * 1000);
-      const toleranceMs = 60 * 1000; // 1 minute window
-
-      const diff = now - reminderTime;
       const sessionKey = `${todayStr}_${course.id}_${sess.id || sess.startPeriod}`;
 
-      if (diff >= 0 && diff < toleranceMs && !notifiedSessionsToday.has(sessionKey)) {
+      if (now >= reminderTime && now < classStartTime && !notifiedSessionsToday.has(sessionKey)) {
         notifiedSessionsToday.add(sessionKey);
 
+        const remainingMins = Math.max(1, Math.ceil((classStartTime - now) / (60 * 1000)));
         const title = `上课提醒：${course.name}`;
         const loc = sess.location ? ` @ ${sess.location}` : '';
-        const body = `还有 ${reminderMinutes} 分钟上课 (${firstPeriod.startTime})${loc}`;
+        const body = `还有 ${remainingMins} 分钟上课 (${firstPeriod.startTime})${loc}`;
 
         // 1. Play chime audio
         playReminderChime();

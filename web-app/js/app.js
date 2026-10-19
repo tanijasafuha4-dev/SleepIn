@@ -28,6 +28,8 @@ import {
   deleteCourse,
   exportFullBackupJSON,
   importFullBackupJSON,
+  formatLocalDate,
+  DEFAULT_MAX_PERIOD,
   STANDARD_14_PERIODS
 } from './db.js';
 
@@ -65,8 +67,17 @@ import {
   convertRecordsToSleepInCsv
 } from './ocr-parser.js';
 
-import { AI_CONFIG } from './config.js';
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
+let sessionRadioGroupUid = 0;
 
 // ---------------- App State ----------------
 const state = {
@@ -86,6 +97,7 @@ const state = {
   editingScheduleId: null,
   managingCourseTimetableId: null,
   editingCourseId: null,
+  editingCourseMaxPeriod: DEFAULT_MAX_PERIOD,
   pendingForceSaveCourse: null
 };
 
@@ -318,6 +330,26 @@ function renderWeekGrid() {
   updateCurrentTimeIndicator();
 }
 
+function applyRowHeightToGrid(rowHeight) {
+  document.documentElement.style.setProperty('--cell-height', `${rowHeight}px`);
+  const totalGridHeight = state.periods.length * rowHeight;
+
+  const sidebar = document.getElementById('timeline-sidebar');
+  if (sidebar) sidebar.style.height = `${totalGridHeight}px`;
+
+  const gridContent = document.getElementById('grid-content');
+  if (gridContent) gridContent.style.height = `${totalGridHeight}px`;
+
+  document.querySelectorAll('#course-cells-layer .course-cell-card').forEach((card) => {
+    const startRow = Number(card.dataset.startRow || 0);
+    const span = Number(card.dataset.span || 1);
+    card.style.top = `${startRow * rowHeight + 2}px`;
+    card.style.height = `${span * rowHeight - 4}px`;
+  });
+
+  updateCurrentTimeIndicator();
+}
+
 function renderCourseCards(rowHeight) {
   const container = document.getElementById('course-cells-layer');
   container.innerHTML = '';
@@ -349,6 +381,9 @@ function renderCourseCards(rowHeight) {
     });
   });
 
+  // Render non-current week courses first so current week courses always sit on top
+  visibleItems.sort((a, b) => Number(a.isCurrentWeek) - Number(b.isCurrentWeek));
+
   visibleItems.forEach((item) => {
     const { course, session, isCurrentWeek } = item;
     const dayIdx = session.dayOfWeek - 1; // 0..6
@@ -363,10 +398,12 @@ function renderCourseCards(rowHeight) {
     const widthPercent = (100 / 7);
 
     const hexColor = intToHexColor(course.color);
-    const textColor = '#FFFFFF';
+    const textColor = getContrastTextColor(hexColor);
 
     const card = document.createElement('div');
     card.className = `course-cell-card ${!isCurrentWeek ? 'non-current' : ''}`;
+    card.dataset.startRow = String(startRow);
+    card.dataset.span = String(span);
     card.style.top = `${topPx}px`;
     card.style.height = `${heightPx}px`;
     card.style.left = `calc(${leftPercent}% + 2px)`;
@@ -375,12 +412,12 @@ function renderCourseCards(rowHeight) {
     card.style.color = textColor;
 
     const nonCurrentBadge = !isCurrentWeek ? `<div class="cell-non-current-badge">非本周</div>` : '';
-    const locStr = session.location ? `<div class="cell-location">@${session.location}</div>` : '';
-    const teacherStr = course.teacher ? `<div class="cell-teacher">${course.teacher}</div>` : '';
+    const locStr = session.location ? `<div class="cell-location">@${escapeHtml(session.location)}</div>` : '';
+    const teacherStr = course.teacher ? `<div class="cell-teacher">${escapeHtml(course.teacher)}</div>` : '';
 
     card.innerHTML = `
       ${nonCurrentBadge}
-      <div class="cell-title">${course.name}</div>
+      <div class="cell-title">${escapeHtml(course.name)}</div>
       ${locStr}
       ${teacherStr}
     `;
@@ -524,10 +561,12 @@ function bindEvents() {
   const weekSlider = document.getElementById('menu-week-slider');
   weekSlider.addEventListener('input', (e) => {
     const val = parseInt(e.target.value, 10);
-    state.selectedWeek = val;
     document.getElementById('menu-week-slider-label').textContent = `第 ${val} 周 / 共 ${state.totalWeeks} 周`;
-    renderTopBar();
-    renderWeekGrid();
+    if (val !== state.selectedWeek) {
+      state.selectedWeek = val;
+      renderTopBar();
+      renderWeekGrid();
+    }
   });
 
   // Empty state buttons
@@ -617,6 +656,51 @@ function bindEvents() {
 
   // Initialize Screenshot to CSV Feature
   initScreenshotCsvFeature();
+}
+
+function getMaxPeriodFromList(periods) {
+  return periods && periods.length > 0
+    ? periods[periods.length - 1].periodNumber
+    : DEFAULT_MAX_PERIOD;
+}
+
+async function importCourseRowsToTimetable(timetableId, rows, defaultNote = '') {
+  const grouped = {};
+  rows.forEach((r) => {
+    const key = `${r.name.trim().toLowerCase()}__${(r.teacher || '').trim().toLowerCase()}`;
+    if (!grouped[key]) {
+      grouped[key] = {
+        name: r.name,
+        teacher: r.teacher || '',
+        sessions: []
+      };
+    }
+    grouped[key].sessions.push({
+      dayOfWeek: r.dayOfWeek,
+      startPeriod: r.startPeriod,
+      endPeriod: r.endPeriod,
+      location: r.location,
+      weekType: r.weekType,
+      startWeek: r.startWeek,
+      endWeek: r.endWeek,
+      customWeeks: r.customWeeks
+    });
+  });
+
+  let colorIdx = 0;
+  const entries = Object.values(grouped);
+  for (const item of entries) {
+    const color = DEFAULT_COURSE_COLORS[colorIdx % DEFAULT_COURSE_COLORS.length];
+    colorIdx++;
+    await saveCourseWithSessions({
+      timetableId,
+      name: item.name,
+      teacher: item.teacher,
+      color,
+      note: defaultNote
+    }, item.sessions);
+  }
+  return entries.length;
 }
 
 // ---------------- Screenshot & OCR to CSV Feature ----------------
@@ -790,38 +874,39 @@ function initScreenshotCsvFeature() {
 
   function addParsedRowToTable(r = {}) {
     const tr = document.createElement('tr');
-    tr.style.borderBottom = '1px solid var(--outline-variant)';
+    tr.className = 'parsed-table-row';
 
     const day = r.dayOfWeek || 1;
+    const maxPeriod = getMaxPeriodFromList(state.periods);
     const dayOptions = [1, 2, 3, 4, 5, 6, 7].map(d => `
       <option value="${d}" ${d === day ? 'selected' : ''}>${DAY_NAMES[d - 1]}</option>
     `).join('');
 
     tr.innerHTML = `
-      <td style="padding: 4px;">
-        <input type="text" class="p-name form-control" style="height: 32px; font-size: 0.75rem; padding: 2px 6px;" value="${r.name || ''}" placeholder="课程名">
+      <td class="parsed-cell">
+        <input type="text" class="p-name form-control parsed-input" value="${escapeHtml(r.name || '')}" placeholder="课程名">
       </td>
-      <td style="padding: 4px;">
-        <select class="p-day form-control" style="height: 32px; font-size: 0.75rem; padding: 2px 4px;">
+      <td class="parsed-cell">
+        <select class="p-day form-control parsed-select">
           ${dayOptions}
         </select>
       </td>
-      <td style="padding: 4px; white-space: nowrap;">
-        <input type="number" class="p-start-period form-control" style="display:inline-block; width: 36px; height: 32px; font-size: 0.75rem; padding: 2px 4px;" min="1" max="15" value="${r.startPeriod || 1}">
+      <td class="parsed-cell-nowrap">
+        <input type="number" class="p-start-period form-control parsed-period-input" min="1" max="${maxPeriod}" value="${Number(r.startPeriod) || 1}">
         -
-        <input type="number" class="p-end-period form-control" style="display:inline-block; width: 36px; height: 32px; font-size: 0.75rem; padding: 2px 4px;" min="1" max="15" value="${r.endPeriod || 2}">
+        <input type="number" class="p-end-period form-control parsed-period-input" min="1" max="${maxPeriod}" value="${Number(r.endPeriod) || 2}">
       </td>
-      <td style="padding: 4px;">
-        <input type="text" class="p-weeks form-control" style="height: 32px; font-size: 0.75rem; padding: 2px 6px; width: 80px;" value="${r.weeks || 'ALL'}" placeholder="1-16">
+      <td class="parsed-cell">
+        <input type="text" class="p-weeks form-control parsed-weeks-input" value="${escapeHtml(r.weeks || 'ALL')}" placeholder="1-16">
       </td>
-      <td style="padding: 4px;">
-        <input type="text" class="p-location form-control" style="height: 32px; font-size: 0.75rem; padding: 2px 6px;" value="${r.location || ''}" placeholder="教室">
+      <td class="parsed-cell">
+        <input type="text" class="p-location form-control parsed-input" value="${escapeHtml(r.location || '')}" placeholder="教室">
       </td>
-      <td style="padding: 4px;">
-        <input type="text" class="p-teacher form-control" style="height: 32px; font-size: 0.75rem; padding: 2px 6px;" value="${r.teacher || ''}" placeholder="教师">
+      <td class="parsed-cell">
+        <input type="text" class="p-teacher form-control parsed-input" value="${escapeHtml(r.teacher || '')}" placeholder="教师">
       </td>
-      <td style="padding: 4px; text-align: center;">
-        <button type="button" class="btn btn-sm btn-danger p-del-btn" style="height: 28px; width: 28px; padding: 0;">✕</button>
+      <td class="parsed-cell-center">
+        <button type="button" class="btn btn-sm btn-danger p-del-btn parsed-del-btn">✕</button>
       </td>
     `;
 
@@ -908,7 +993,7 @@ function initScreenshotCsvFeature() {
     // Convert and import
     const csvStr = convertRecordsToSleepInCsv(records);
     const periods = await getPeriodsBySchedule(state.activeTimetable.scheduleId);
-    const maxPeriod = periods.length > 0 ? periods[periods.length - 1].periodNumber : 15;
+    const maxPeriod = getMaxPeriodFromList(periods);
 
     const { rows, errors } = parseCourseCsv(csvStr, state.totalWeeks, maxPeriod);
     if (errors.length > 0) {
@@ -916,46 +1001,15 @@ function initScreenshotCsvFeature() {
       return;
     }
 
-    // Group by course name
-    const grouped = {};
-    rows.forEach(r => {
-      const key = r.name.toLowerCase();
-      if (!grouped[key]) {
-        grouped[key] = {
-          name: r.name,
-          teacher: r.teacher,
-          sessions: []
-        };
-      }
-      grouped[key].sessions.push({
-        dayOfWeek: r.dayOfWeek,
-        startPeriod: r.startPeriod,
-        endPeriod: r.endPeriod,
-        location: r.location,
-        weekType: r.weekType,
-        startWeek: r.startWeek,
-        endWeek: r.endWeek,
-        customWeeks: r.customWeeks
-      });
-    });
-
-    let colorIdx = 0;
-    for (const k in grouped) {
-      const item = grouped[k];
-      const color = DEFAULT_COURSE_COLORS[colorIdx % DEFAULT_COURSE_COLORS.length];
-      colorIdx++;
-      await saveCourseWithSessions({
-        timetableId: state.activeTimetable.id,
-        name: item.name,
-        teacher: item.teacher,
-        color,
-        note: '截图智能导入'
-      }, item.sessions);
-    }
+    const importedCourseCount = await importCourseRowsToTimetable(
+      state.activeTimetable.id,
+      rows,
+      '截图智能导入'
+    );
 
     modal.classList.remove('visible');
     await refreshAll();
-    showFluidCloudToast('导入成功', `成功将 ${Object.keys(grouped).length} 门课程导入到当前课表！`);
+    showFluidCloudToast('导入成功', `成功将 ${importedCourseCount} 门课程导入到当前课表！`);
   });
 }
 
@@ -1076,10 +1130,10 @@ function openTimetableListModal() {
     item.innerHTML = `
       <div class="entity-info-group">
         <div class="entity-name">
-          ${t.name}
+          ${escapeHtml(t.name)}
           ${t.isActive ? '<span class="entity-badge">当前课表</span>' : ''}
         </div>
-        <div class="entity-sub">开学: ${t.startDate} · 共 ${t.totalWeeks} 周 · 作息: ${sch ? sch.name : '默认'}</div>
+        <div class="entity-sub">开学: ${escapeHtml(t.startDate)} · 共 ${Number(t.totalWeeks) || 18} 周 · 作息: ${escapeHtml(sch ? sch.name : '默认')}</div>
       </div>
       <div class="entity-actions">
         ${!t.isActive ? `<button class="btn btn-sm btn-outlined btn-set-active">设为当前</button>` : ''}
@@ -1152,7 +1206,7 @@ async function openTimetableEditorModal(timetableId = null) {
   } else {
     document.getElementById('tt-form-name').value = '新学期课程表';
     document.getElementById('tt-form-total-weeks').value = 18;
-    const today = new Date().toISOString().split('T')[0];
+    const today = formatLocalDate();
     document.getElementById('tt-form-start-date').value = today;
     if (state.allSchedules.length > 0) {
       schSelect.value = state.allSchedules[0].id;
@@ -1218,7 +1272,7 @@ async function handleTimetableCsvImport(e) {
       const totalWeeks = parseInt(document.getElementById('tt-form-total-weeks').value, 10) || 18;
       const scheduleId = parseInt(document.getElementById('tt-form-schedule').value, 10);
       const periods = await getPeriodsBySchedule(scheduleId);
-      const maxPeriod = periods.length > 0 ? periods[periods.length - 1].periodNumber : 12;
+      const maxPeriod = getMaxPeriodFromList(periods);
 
       const { rows, errors } = parseCourseCsv(rawCsv, totalWeeks, maxPeriod);
 
@@ -1232,9 +1286,9 @@ async function handleTimetableCsvImport(e) {
         return;
       }
 
-      // Create new timetable first
+      // Create new timetable and set it as the sole active timetable
       const name = document.getElementById('tt-form-name').value.trim() || file.name.replace(/\.[^/.]+$/, '');
-      const startDate = document.getElementById('tt-form-start-date').value;
+      const startDate = document.getElementById('tt-form-start-date').value || formatLocalDate();
       const now = Date.now();
 
       const timetableId = await addTimetable({
@@ -1243,51 +1297,17 @@ async function handleTimetableCsvImport(e) {
         startDate,
         scheduleId,
         colorScheme: 'default',
-        isActive: true,
+        isActive: false,
         createdAt: now,
         updatedAt: now
       });
 
-      // Group rows by course name
-      const grouped = {};
-      rows.forEach(r => {
-        const key = r.name.toLowerCase();
-        if (!grouped[key]) {
-          grouped[key] = {
-            name: r.name,
-            teacher: r.teacher,
-            sessions: []
-          };
-        }
-        grouped[key].sessions.push({
-          dayOfWeek: r.dayOfWeek,
-          startPeriod: r.startPeriod,
-          endPeriod: r.endPeriod,
-          location: r.location,
-          weekType: r.weekType,
-          startWeek: r.startWeek,
-          endWeek: r.endWeek,
-          customWeeks: r.customWeeks
-        });
-      });
-
-      let colorIdx = 0;
-      for (const k in grouped) {
-        const item = grouped[k];
-        const color = DEFAULT_COURSE_COLORS[colorIdx % DEFAULT_COURSE_COLORS.length];
-        colorIdx++;
-        await saveCourseWithSessions({
-          timetableId,
-          name: item.name,
-          teacher: item.teacher,
-          color,
-          note: ''
-        }, item.sessions);
-      }
+      await setActiveTimetable(timetableId);
+      const importedCourseCount = await importCourseRowsToTimetable(timetableId, rows, '');
 
       closeTimetableEditorModal();
       await refreshAll();
-      showFluidCloudToast('导入成功', `成功导入 ${Object.keys(grouped).length} 门课程并激活课表`);
+      showFluidCloudToast('导入成功', `成功导入 ${importedCourseCount} 门课程并激活课表`);
     } catch (err) {
       alert(`导入异常: ${err.message}`);
     }
@@ -1319,7 +1339,7 @@ function openScheduleListModal() {
     item.className = 'entity-list-item';
     item.innerHTML = `
       <div class="entity-info-group">
-        <div class="entity-name">${s.name} ${isUsed ? '<span class="entity-badge">使用中</span>' : ''}</div>
+        <div class="entity-name">${escapeHtml(s.name)} ${isUsed ? '<span class="entity-badge">使用中</span>' : ''}</div>
         <div class="entity-sub">创建时间: ${new Date(s.createdAt).toLocaleDateString()}</div>
       </div>
       <div class="entity-actions">
@@ -1393,7 +1413,7 @@ function autoGeneratePeriods() {
   const startStr = document.getElementById('gen-first-start').value || '08:00';
   const duration = parseInt(document.getElementById('gen-duration').value, 10) || 45;
   const breakMin = parseInt(document.getElementById('gen-break').value, 10) || 10;
-  const total = parseInt(document.getElementById('gen-count').value, 10) || 14;
+  const total = parseInt(document.getElementById('gen-count').value, 10) || DEFAULT_MAX_PERIOD;
 
   const [h, m] = startStr.split(':').map(Number);
   let curMins = h * 60 + m;
@@ -1435,11 +1455,11 @@ function addPeriodRow(startTime = '08:00', endTime = '08:45') {
     <div class="form-row">
       <div class="form-group">
         <label class="form-label">开始时间</label>
-        <input type="time" class="form-control period-start-input" value="${startTime}">
+        <input type="time" class="form-control period-start-input" value="${escapeHtml(startTime)}">
       </div>
       <div class="form-group">
         <label class="form-label">结束时间</label>
-        <input type="time" class="form-control period-end-input" value="${endTime}">
+        <input type="time" class="form-control period-end-input" value="${escapeHtml(endTime)}">
       </div>
     </div>
   `;
@@ -1520,8 +1540,9 @@ async function handleScheduleCsvImport(e) {
         return;
       }
 
+      const finalScheduleName = scheduleName || file.name.replace(/\.[^/.]+$/, '');
       const schId = await addSchedule({
-        name: scheduleName || file.name.replace(/\.[^/.]+$/, ''),
+        name: finalScheduleName,
         createdAt: Date.now()
       });
       await replaceSchedulePeriods(schId, periods);
@@ -1529,7 +1550,7 @@ async function handleScheduleCsvImport(e) {
       closeScheduleEditorModal();
       await refreshAll();
       openScheduleListModal();
-      showFluidCloudToast('导入成功', `成功导入作息表“${scheduleName}”`);
+      showFluidCloudToast('导入成功', `成功导入作息表“${finalScheduleName}”`);
     } catch (err) {
       alert(`导入异常: ${err.message}`);
     }
@@ -1561,7 +1582,7 @@ function openCourseListModal(timetableId) {
 
   getCoursesWithSessions(timetableId).then((list) => {
     if (list.length === 0) {
-      container.innerHTML = `<div style="text-align:center;padding:24px;color:var(--outline);">此课程表暂无课程</div>`;
+      container.innerHTML = `<div class="empty-list-placeholder">此课程表暂无课程</div>`;
       return;
     }
 
@@ -1576,10 +1597,10 @@ function openCourseListModal(timetableId) {
       row.innerHTML = `
         <div class="entity-info-group">
           <div class="entity-name">
-            <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background-color:${intToHexColor(course.color)};margin-right:4px;"></span>
-            ${course.name}
+            <span class="course-color-dot" style="background-color:${intToHexColor(course.color)};"></span>
+            ${escapeHtml(course.name)}
           </div>
-          <div class="entity-sub">${course.teacher ? course.teacher + ' · ' : ''}${sessionSummary}</div>
+          <div class="entity-sub">${course.teacher ? escapeHtml(course.teacher) + ' · ' : ''}${escapeHtml(sessionSummary)}</div>
         </div>
         <div class="entity-actions">
           <button class="btn btn-sm btn-secondary btn-edit-course">编辑</button>
@@ -1614,6 +1635,15 @@ function closeCourseListModal() {
 async function openCourseEditorModal(courseId = null, timetableId = null) {
   state.editingCourseId = courseId;
   state.managingCourseTimetableId = timetableId || (state.activeTimetable ? state.activeTimetable.id : null);
+
+  // Resolve target timetable periods so non-active timetable course editing uses its own schedule
+  const targetTt = state.allTimetables.find(t => t.id === state.managingCourseTimetableId) || state.activeTimetable;
+  if (targetTt) {
+    const targetPeriods = await getPeriodsBySchedule(targetTt.scheduleId);
+    state.editingCourseMaxPeriod = getMaxPeriodFromList(targetPeriods);
+  } else {
+    state.editingCourseMaxPeriod = getMaxPeriodFromList(state.periods);
+  }
 
   const isEdit = courseId != null;
   document.getElementById('course-editor-title').textContent = isEdit ? '编辑课程' : '新建课程';
@@ -1676,6 +1706,7 @@ function selectColorSwatch(hex) {
 function addSessionEditorCard(data = null) {
   const container = document.getElementById('sessions-editor-container');
   const index = container.children.length + 1;
+  const radioGroupName = `weekType_${++sessionRadioGroupUid}`;
 
   const card = document.createElement('div');
   card.className = 'session-card';
@@ -1689,7 +1720,7 @@ function addSessionEditorCard(data = null) {
   const endW = data ? (data.endWeek || state.totalWeeks) : state.totalWeeks;
   const customW = data ? (data.customWeeks || []) : [];
 
-  const maxPeriod = state.periods.length > 0 ? state.periods[state.periods.length - 1].periodNumber : 12;
+  const maxPeriod = state.editingCourseMaxPeriod || getMaxPeriodFromList(state.periods);
 
   let periodOptions = '';
   for (let p = 1; p <= maxPeriod; p++) {
@@ -1724,20 +1755,20 @@ function addSessionEditorCard(data = null) {
 
     <div class="form-group">
       <label class="form-label">上课地点 (可选)</label>
-      <input type="text" class="form-control session-location" placeholder="例如：理教 301" value="${loc}">
+      <input type="text" class="form-control session-location" placeholder="例如：理教 301" value="${escapeHtml(loc)}">
     </div>
 
     <div class="form-group">
       <label class="form-label">周数规则</label>
       <div class="week-type-options">
         <label class="radio-label">
-          <input type="radio" name="weekType_${index}" value="ALL" ${weekType === 'ALL' ? 'checked' : ''}> 所有周
+          <input type="radio" name="${radioGroupName}" value="ALL" ${weekType === 'ALL' ? 'checked' : ''}> 所有周
         </label>
         <label class="radio-label">
-          <input type="radio" name="weekType_${index}" value="RANGE" ${weekType === 'RANGE' ? 'checked' : ''}> 连续范围
+          <input type="radio" name="${radioGroupName}" value="RANGE" ${weekType === 'RANGE' ? 'checked' : ''}> 连续范围
         </label>
         <label class="radio-label">
-          <input type="radio" name="weekType_${index}" value="CUSTOM" ${weekType === 'CUSTOM' ? 'checked' : ''}> 自定义周
+          <input type="radio" name="${radioGroupName}" value="CUSTOM" ${weekType === 'CUSTOM' ? 'checked' : ''}> 自定义周
         </label>
       </div>
     </div>
@@ -1781,7 +1812,7 @@ function addSessionEditorCard(data = null) {
   });
 
   // Week type radio toggle
-  card.querySelectorAll(`input[name="weekType_${index}"]`).forEach(radio => {
+  card.querySelectorAll(`input[name="${radioGroupName}"]`).forEach(radio => {
     radio.addEventListener('change', (e) => {
       const val = e.target.value;
       card.querySelector('.session-range-fields').style.display = (val === 'RANGE') ? 'flex' : 'none';
@@ -1911,8 +1942,8 @@ async function saveCourseForm() {
 
     const conflictListEl = document.getElementById('conflict-list-content');
     conflictListEl.innerHTML = conflicts.map(c => `
-      <div style="padding:6px 8px;background:var(--surface-container);border-radius:6px;font-size:0.8rem;">
-        ⚠️ 与 <strong>${c.existingCourseName}</strong> 冲突：<br>
+      <div class="conflict-item-card">
+        ⚠️ 与 <strong>${escapeHtml(c.existingCourseName)}</strong> 冲突：<br>
         ${DAY_NAMES[c.dayOfWeek - 1]} 第${c.overlapStartPeriod}-${c.overlapEndPeriod}节 · 第 ${c.overlapWeeks.join(',')} 周
       </div>
     `).join('');
@@ -2012,14 +2043,17 @@ function bindSettingsEvents() {
     });
   });
 
-  // Cell height slider
+  // Cell height slider (lightweight DOM preview on input, DB persistence on change)
   const slider = document.getElementById('setting-cell-height-slider');
-  slider.addEventListener('input', async (e) => {
+  slider.addEventListener('input', (e) => {
     const val = parseInt(e.target.value, 10);
     document.getElementById('setting-cell-height-label').textContent = `${val} px`;
-    await updateSettings({ courseCellHeightDp: val });
     state.settings.courseCellHeightDp = val;
-    renderWeekGrid();
+    applyRowHeightToGrid(val);
+  });
+  slider.addEventListener('change', async (e) => {
+    const val = parseInt(e.target.value, 10);
+    await updateSettings({ courseCellHeightDp: val });
   });
 
   // Non-current switch
@@ -2033,7 +2067,7 @@ function bindSettingsEvents() {
   // Backup & Restore
   document.getElementById('btn-export-backup-json').addEventListener('click', async () => {
     const jsonStr = await exportFullBackupJSON();
-    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const dateStr = formatLocalDate().replace(/-/g, '');
     downloadFile(`sleepin_backup_${dateStr}.json`, 'application/json', jsonStr);
     showFluidCloudToast('导出成功', '已生成完整数据备份文件');
   });
@@ -2098,11 +2132,11 @@ function renderWidgetPreviews() {
         <span>📅 今日课程 (${DAY_LABELS_FULL[dayOfWeek - 1]})</span>
         <span>${todaySessions.length} 门课</span>
       </div>
-      ${todaySessions.length === 0 ? '<div style="font-size:0.75rem;color:var(--outline);text-align:center;padding:8px;">今天没有排课，好好休息吧~</div>' : ''}
+      ${todaySessions.length === 0 ? '<div class="widget-empty-hint">今天没有排课，好好休息吧~</div>' : ''}
       ${todaySessions.slice(0, 3).map(ts => `
         <div class="widget-item-pill">
-          <span>${ts.course.name}</span>
-          <span>第${ts.session.startPeriod}-${ts.session.endPeriod}节 ${ts.session.location ? '@' + ts.session.location : ''}</span>
+          <span>${escapeHtml(ts.course.name)}</span>
+          <span>第${ts.session.startPeriod}-${ts.session.endPeriod}节 ${ts.session.location ? '@' + escapeHtml(ts.session.location) : ''}</span>
         </div>
       `).join('')}
     </div>
