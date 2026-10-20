@@ -7,7 +7,7 @@
  * 3. 校验与标准化：转换为 SleepIn 规范的 CSV 格式（含 UTF-8 BOM，列名：课程名称,教师,地点,星期,开始节次,结束节次,周次）。
  */
 
-import { encodeCsvField } from './csv.js';
+import { COURSE_CSV_HEADERS, buildCsv } from './csv.js';
 import { AI_CONFIG } from './config.js';
 
 // 多模态 Vision Prompt 模板
@@ -106,12 +106,9 @@ export async function parseScreenshotWithVisionAPI({
   const json = await response.json();
   const rawContent = json.choices?.[0]?.message?.content || '';
 
-  // 清洗 Markdown 代码块并安全提取 JSON 数组
-  let jsonStr = rawContent.replace(/```json/gi, '').replace(/```/gi, '').trim();
-  const arrayMatch = jsonStr.match(/\[[\s\S]*\]/);
-  if (arrayMatch) {
-    jsonStr = arrayMatch[0];
-  }
+  // 安全提取 JSON 数组
+  const arrayMatch = rawContent.match(/\[[\s\S]*\]/);
+  const jsonStr = arrayMatch ? arrayMatch[0] : rawContent.trim();
 
   let records;
   try {
@@ -136,7 +133,7 @@ export function parseRawTimetableText(text) {
 
   // 星期正则匹配
   const dayRegex = /(?:周|星期|礼拜)([一二三四五六日天1-7])/;
-  const dayMap = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '日': 7, '天': 7, '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7 };
+  const dayMap = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '日': 7, '天': 7 };
 
   // 节次正则匹配：如 第1-2节, 1-2节, [01-02]
   const periodRegex = /(?:第)?\s*(\d{1,2})\s*[-~到至]\s*(\d{1,2})\s*(?:节|节次)?/;
@@ -150,7 +147,7 @@ export function parseRawTimetableText(text) {
     // 检查是否单独行是星期
     const dayMatch = line.match(dayRegex);
     if (dayMatch && dayMatch[1]) {
-      currentDay = dayMap[dayMatch[1]] || 1;
+      currentDay = dayMap[dayMatch[1]] || parseInt(dayMatch[1], 10) || 1;
     }
 
     // 先提取周次并从临时串中剔除，避免节次数字与周次数字相互误判
@@ -177,7 +174,7 @@ export function parseRawTimetableText(text) {
       const endP = parseInt(pMatch[2], 10);
 
       // 尝试提取课程名（去除时间段文本）
-      let courseName = cleanLine
+      const courseName = cleanLine
         .replace(pMatch[0], ' ')
         .replace(dayRegex, ' ')
         .replace(/[【】\[\]()（）第节周]/g, ' ')
@@ -208,7 +205,7 @@ export function parseRawTimetableText(text) {
  * 校验并标准化提取结果
  */
 function normalizeParsedRecords(records) {
-  return records.map((r, index) => {
+  return records.map((r) => {
     let day = parseInt(r.dayOfWeek, 10);
     if (isNaN(day) || day < 1 || day > 7) day = 1;
 
@@ -217,11 +214,9 @@ function normalizeParsedRecords(records) {
     if (isNaN(startP) || startP < 1) startP = 1;
     if (isNaN(endP) || endP < startP) endP = startP;
 
-    let weeks = (r.weeks || 'ALL').trim();
-    if (!weeks) weeks = 'ALL';
+    const weeks = String(r.weeks || 'ALL').trim() || 'ALL';
 
     return {
-      id: index + 1,
       name: (r.name || '未命名课程').trim(),
       teacher: (r.teacher || '').trim(),
       location: (r.location || '').trim(),
@@ -237,21 +232,14 @@ function normalizeParsedRecords(records) {
  * 将解析出的记录转换为符合 SleepIn 规范的标准 CSV
  */
 export function convertRecordsToSleepInCsv(records) {
-  const header = ['课程名称', '教师', '地点', '星期', '开始节次', '结束节次', '周次'];
-  const rows = [header.map(encodeCsvField).join(',')];
-
-  records.forEach(r => {
-    const row = [
-      r.name,
-      r.teacher,
-      r.location,
-      r.dayOfWeek,
-      r.startPeriod,
-      r.endPeriod,
-      r.weeks
-    ].map(encodeCsvField);
-    rows.push(row.join(','));
-  });
-
-  return '\uFEFF' + rows.join('\n');
+  const rows = records.map(r => [
+    r.name,
+    r.teacher,
+    r.location,
+    r.dayOfWeek,
+    r.startPeriod,
+    r.endPeriod,
+    r.weeks
+  ]);
+  return buildCsv(COURSE_CSV_HEADERS, rows);
 }

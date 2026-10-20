@@ -4,15 +4,24 @@
  * and In-App Dynamic Island / Fluid Cloud Toast.
  */
 
-import { getSettings, getActiveTimetable, getPeriodsBySchedule, getCoursesWithSessions, formatLocalDate } from './db.js';
-import { resolveWeeks } from './conflict.js';
+import {
+  getSettings,
+  getActiveTimetable,
+  getPeriodsBySchedule,
+  getCoursesWithSessions,
+  formatLocalDate,
+  getIsoDayOfWeek,
+  timeToMinutes,
+  computeSemesterStatus
+} from './db.js';
+import { isSessionInWeek } from './conflict.js';
 
 let audioContext = null;
 let reminderAudio = null;
 let lastCheckedDateStr = '';
 const notifiedSessionsToday = new Set(); // Key: `${dateStr}_${courseId}_${sessionId}`
 
-export function initAudio() {
+function initAudio() {
   try {
     reminderAudio = new Audio('./assets/audio/reminder.wav');
   } catch (e) {
@@ -41,7 +50,7 @@ export async function playReminderChime() {
   }
 }
 
-export function playSynthesizedChime() {
+function playSynthesizedChime() {
   try {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtx) return;
@@ -53,32 +62,23 @@ export function playSynthesizedChime() {
     }
 
     const now = audioContext.currentTime;
+    const playTone = (freq, startOffset, attackOffset, stopOffset, peakGain) => {
+      const osc = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + startOffset);
+      gain.gain.setValueAtTime(0, now + startOffset);
+      gain.gain.linearRampToValueAtTime(peakGain, now + attackOffset);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + stopOffset);
+      osc.connect(gain);
+      gain.connect(audioContext.destination);
+      osc.start(now + startOffset);
+      osc.stop(now + stopOffset);
+    };
 
-    // Tone 1: C6 (1046.5Hz)
-    const osc1 = audioContext.createOscillator();
-    const gain1 = audioContext.createGain();
-    osc1.type = 'sine';
-    osc1.frequency.setValueAtTime(1046.5, now);
-    gain1.gain.setValueAtTime(0, now);
-    gain1.gain.linearRampToValueAtTime(0.35, now + 0.03);
-    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.9);
-    osc1.connect(gain1);
-    gain1.connect(audioContext.destination);
-    osc1.start(now);
-    osc1.stop(now + 0.9);
-
-    // Tone 2: E6 (1318.5Hz)
-    const osc2 = audioContext.createOscillator();
-    const gain2 = audioContext.createGain();
-    osc2.type = 'sine';
-    osc2.frequency.setValueAtTime(1318.5, now + 0.22);
-    gain2.gain.setValueAtTime(0, now + 0.22);
-    gain2.gain.linearRampToValueAtTime(0.4, now + 0.25);
-    gain2.gain.exponentialRampToValueAtTime(0.001, now + 1.4);
-    osc2.connect(gain2);
-    gain2.connect(audioContext.destination);
-    osc2.start(now + 0.22);
-    osc2.stop(now + 1.4);
+    // Tone 1: C6 (1046.5Hz), Tone 2: E6 (1318.5Hz)
+    playTone(1046.5, 0, 0.03, 0.9, 0.35);
+    playTone(1318.5, 0.22, 0.25, 1.4, 0.4);
   } catch (e) {
     console.warn('Web Audio synthesis failed:', e);
   }
@@ -144,12 +144,17 @@ export function showFluidCloudToast(title, body, duration = 6000) {
 
 /**
  * Checks for upcoming classes and triggers reminder when due.
+ * Reuses in-memory appState when provided to avoid redundant IndexedDB queries.
  */
-export async function checkReminders() {
-  const settings = await getSettings();
+export async function checkReminders(appState = null) {
+  const settings = (appState && appState.settings && Object.keys(appState.settings).length > 0)
+    ? appState.settings
+    : await getSettings();
   if (!settings.notificationsEnabled) return;
 
-  const activeTimetable = await getActiveTimetable();
+  const activeTimetable = (appState && appState.activeTimetable !== undefined)
+    ? appState.activeTimetable
+    : await getActiveTimetable();
   if (!activeTimetable) return;
 
   const now = new Date();
@@ -160,38 +165,41 @@ export async function checkReminders() {
     lastCheckedDateStr = todayStr;
   }
 
-  // Calculate current semester week
-  const startDate = new Date(activeTimetable.startDate + 'T00:00:00');
-  const daysDiff = Math.floor((now - startDate) / (1000 * 60 * 60 * 24));
-  if (daysDiff < 0) return; // Semester not started
-  const currentWeek = Math.floor(daysDiff / 7) + 1;
-  if (currentWeek > activeTimetable.totalWeeks) return; // Semester ended
+  const { currentWeek, totalWeeks } = computeSemesterStatus(activeTimetable, now);
+  if (!currentWeek) return; // Semester not started or already ended
 
-  // Day of week: 1 = Monday, 7 = Sunday
-  const jsDay = now.getDay();
-  const dayOfWeek = (jsDay === 0 ? 7 : jsDay);
+  const dayOfWeek = getIsoDayOfWeek(now);
 
-  const periods = await getPeriodsBySchedule(activeTimetable.scheduleId);
+  const periods = (appState && Array.isArray(appState.periods))
+    ? appState.periods
+    : await getPeriodsBySchedule(activeTimetable.scheduleId);
   const periodMap = {};
   periods.forEach(p => { periodMap[p.periodNumber] = p; });
 
-  const coursesWithSessions = await getCoursesWithSessions(activeTimetable.id);
+  const coursesWithSessions = (appState && Array.isArray(appState.courses))
+    ? appState.courses
+    : await getCoursesWithSessions(activeTimetable.id);
   const reminderMinutes = settings.reminderMinutes || 10;
 
   for (const item of coursesWithSessions) {
     const { course, sessions } = item;
     for (const sess of sessions) {
       if (Number(sess.dayOfWeek) !== dayOfWeek) continue;
-
-      const activeWeeks = resolveWeeks(sess.weekType, sess.startWeek, sess.endWeek, sess.customWeeks, activeTimetable.totalWeeks);
-      if (!activeWeeks.has(currentWeek)) continue;
+      if (!isSessionInWeek(sess, currentWeek, totalWeeks)) continue;
 
       const firstPeriod = periodMap[sess.startPeriod];
       if (!firstPeriod) continue;
 
       // Class start time today
-      const [h, m] = firstPeriod.startTime.split(':').map(Number);
-      const classStartTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
+      const startMins = timeToMinutes(firstPeriod.startTime);
+      const classStartTime = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate(),
+        Math.floor(startMins / 60),
+        startMins % 60,
+        0
+      );
 
       // Reminder trigger window: [classStartTime - reminderMinutes, classStartTime)
       const reminderTime = new Date(classStartTime.getTime() - reminderMinutes * 60 * 1000);
@@ -220,17 +228,24 @@ export async function checkReminders() {
         }
 
         // 3. In-app fluid cloud notification
-        showFluidCloudToast(title, body);
+        if (settings.fluidCloudEnabled !== false) {
+          showFluidCloudToast(title, body);
+        }
       }
     }
   }
 }
 
-// Start recurring check
-export function startReminderScheduler() {
+// Start recurring check (also invokes optional onTick callback so app only needs 1 timer)
+export function startReminderScheduler(getStateFn = null, onTick = null) {
   initAudio();
-  setInterval(() => {
-    checkReminders().catch(() => {});
-  }, 15000);
-  checkReminders().catch(() => {});
+  const runTick = () => {
+    const currentState = typeof getStateFn === 'function' ? getStateFn() : null;
+    if (typeof onTick === 'function') {
+      try { onTick(); } catch (e) {}
+    }
+    checkReminders(currentState).catch(() => {});
+  };
+  setInterval(runTick, 15000);
+  runTick();
 }

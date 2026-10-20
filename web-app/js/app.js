@@ -5,11 +5,16 @@
  */
 
 import {
+  APP_VERSION,
+  DEFAULT_TOTAL_WEEKS,
+  DEFAULT_CELL_HEIGHT
+} from './config.js';
+
+import {
   seedInitialDataIfNeeded,
   getSettings,
   updateSettings,
   getAllTimetables,
-  getActiveTimetable,
   getTimetableById,
   addTimetable,
   updateTimetable,
@@ -29,6 +34,10 @@ import {
   exportFullBackupJSON,
   importFullBackupJSON,
   formatLocalDate,
+  getIsoDayOfWeek,
+  timeToMinutes,
+  minutesToTime,
+  computeSemesterStatus,
   DEFAULT_MAX_PERIOD,
   STANDARD_14_PERIODS
 } from './db.js';
@@ -37,12 +46,14 @@ import {
   parseCourseCsv,
   exportCourseCsv,
   parseScheduleCsv,
-  exportScheduleCsv
+  exportScheduleCsv,
+  validateAndBuildCourseRow
 } from './csv.js';
 
 import {
   checkCourseConflicts,
-  resolveWeeks
+  isSessionInWeek,
+  formatSessionWeeks
 } from './conflict.js';
 
 import {
@@ -54,6 +65,7 @@ import {
 
 import {
   DEFAULT_COURSE_COLORS,
+  DEFAULT_COURSE_COLOR_HEX,
   intToHexColor,
   hexToIntColor,
   getContrastTextColor,
@@ -77,6 +89,14 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
+function stripFileExtension(filename) {
+  return String(filename || '').replace(/\.[^/.]+$/, '');
+}
+
+function formatCsvErrors(errors) {
+  return errors.map(er => `第 ${er.rowNumber} 行: ${er.message}`).join('\n');
+}
+
 let sessionRadioGroupUid = 0;
 
 // ---------------- App State ----------------
@@ -88,21 +108,43 @@ const state = {
   courses: [], // CourseWithSessions
   selectedWeek: 1,
   currentWeek: null,
-  totalWeeks: 18,
+  totalWeeks: DEFAULT_TOTAL_WEEKS,
   semesterStatus: null, // null | '学期未开始' | '学期已结束'
   settings: {},
-  weekDates: [],
   selectedCourseDetail: null,
   editingTimetableId: null,
   editingScheduleId: null,
   managingCourseTimetableId: null,
   editingCourseId: null,
   editingCourseMaxPeriod: DEFAULT_MAX_PERIOD,
+  editingCourseTotalWeeks: DEFAULT_TOTAL_WEEKS,
   pendingForceSaveCourse: null
 };
 
 const DAY_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const DAY_LABELS_FULL = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日'];
+
+// Modal / Bottom Sheet close cleanup callbacks
+const MODAL_CLOSE_CLEANUP = {
+  'timetable-editor-modal': () => { state.editingTimetableId = null; },
+  'schedule-editor-modal': () => { state.editingScheduleId = null; },
+  'course-list-modal': () => { state.managingCourseTimetableId = null; },
+  'course-editor-modal': () => { state.editingCourseId = null; },
+  'conflict-dialog-overlay': () => { state.pendingForceSaveCourse = null; },
+  'course-detail-backdrop': () => { state.selectedCourseDetail = null; }
+};
+
+function showModal(id) {
+  document.getElementById(id)?.classList.add('visible');
+}
+
+function hideModal(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.remove('visible');
+  if (MODAL_CLOSE_CLEANUP[id]) {
+    MODAL_CLOSE_CLEANUP[id]();
+  }
+}
 
 // ---------------- Initialization ----------------
 document.addEventListener('DOMContentLoaded', async () => {
@@ -128,17 +170,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 4. Check for iOS Safari Add-To-Home-Screen banner
   checkIosPwaBanner();
 
-  // 5. Start reminder engine
-  startReminderScheduler();
-
-  // 6. Bind UI event listeners
+  // 5. Bind UI event listeners
   bindEvents();
 
-  // 7. Initial refresh of active timetable and views
+  // 6. Initial refresh of active timetable and views
   await refreshAll();
 
-  // 8. Start real-time clock ticker
-  setInterval(updateCurrentTimeIndicator, 30000);
+  // 7. Start unified scheduler for reminders & current time indicator
+  startReminderScheduler(() => state, updateCurrentTimeIndicator);
 });
 
 // ---------------- Main Data Refresh ----------------
@@ -146,19 +185,22 @@ async function refreshAll() {
   state.settings = await getSettings();
   state.allTimetables = await getAllTimetables();
   state.allSchedules = await getAllSchedules();
-  state.activeTimetable = await getActiveTimetable();
+  state.activeTimetable = state.allTimetables.find(t => t.isActive) || null;
 
   if (!state.activeTimetable && state.allTimetables.length > 0) {
     state.activeTimetable = state.allTimetables[0];
+    state.activeTimetable.isActive = true;
     await setActiveTimetable(state.activeTimetable.id);
   }
 
   if (state.activeTimetable) {
-    state.totalWeeks = state.activeTimetable.totalWeeks || 18;
     calculateSemesterWeek();
     state.periods = await getPeriodsBySchedule(state.activeTimetable.scheduleId);
     state.courses = await getCoursesWithSessions(state.activeTimetable.id);
   } else {
+    state.totalWeeks = DEFAULT_TOTAL_WEEKS;
+    state.currentWeek = null;
+    state.semesterStatus = null;
     state.periods = [];
     state.courses = [];
   }
@@ -169,34 +211,22 @@ async function refreshAll() {
 
 // ---------------- Date & Semester Week Calculations ----------------
 function calculateSemesterWeek() {
-  if (!state.activeTimetable) return;
+  const { currentWeek, semesterStatus, totalWeeks } = computeSemesterStatus(state.activeTimetable);
+  state.totalWeeks = totalWeeks;
+  state.currentWeek = currentWeek;
+  state.semesterStatus = semesterStatus;
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const startDate = new Date(state.activeTimetable.startDate + 'T00:00:00');
-  startDate.setHours(0, 0, 0, 0);
-
-  const totalDays = state.totalWeeks * 7;
-  const endDate = new Date(startDate);
-  endDate.setDate(startDate.getDate() + totalDays - 1);
-
-  if (today < startDate) {
-    state.semesterStatus = '学期未开始';
-    state.currentWeek = null;
-  } else if (today > endDate) {
-    state.semesterStatus = '学期已结束';
-    state.currentWeek = null;
-  } else {
-    state.semesterStatus = null;
-    const diffTime = today.getTime() - startDate.getTime();
-    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-    state.currentWeek = Math.floor(diffDays / 7) + 1;
-  }
-
-  // Set selected week if not initialized or out of range
   if (!state.selectedWeek || state.selectedWeek > state.totalWeeks || state.selectedWeek < 1) {
     state.selectedWeek = state.currentWeek || 1;
+  }
+}
+
+function goToWeek(targetWeek) {
+  const clamped = Math.max(1, Math.min(state.totalWeeks, Number(targetWeek) || 1));
+  if (clamped !== state.selectedWeek) {
+    state.selectedWeek = clamped;
+    renderTopBar();
+    renderWeekGrid();
   }
 }
 
@@ -223,9 +253,9 @@ function renderTopBar() {
 
   const now = new Date();
   const year = now.getFullYear();
-  const month = (now.getMonth() + 1).toString().padStart(2, '0');
-  const date = now.getDate().toString().padStart(2, '0');
-  const dayName = DAY_LABELS_FULL[(now.getDay() + 6) % 7];
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const date = String(now.getDate()).padStart(2, '0');
+  const dayName = DAY_LABELS_FULL[getIsoDayOfWeek(now) - 1];
 
   topDateEl.textContent = `${year}年${month}月${date}日 ${dayName}`;
 
@@ -263,31 +293,26 @@ function renderWeekGrid() {
   emptyView.style.display = 'none';
   gridWrapper.style.display = 'flex';
 
-  // Apply row height setting
-  const rowHeight = (state.settings.courseCellHeightDp || 88);
+  // Apply CSS custom properties for row height and period count
+  const rowHeight = state.settings.courseCellHeightDp || DEFAULT_CELL_HEIGHT;
   document.documentElement.style.setProperty('--cell-height', `${rowHeight}px`);
+  document.documentElement.style.setProperty('--period-count', String(state.periods.length));
 
   // Render Header Dates
   const headerContainer = document.getElementById('days-header-container');
   headerContainer.innerHTML = '';
 
   const dates = getWeekDates(state.activeTimetable.startDate, state.selectedWeek);
-  state.weekDates = dates;
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  let todayColumnIndex = null;
-  if (state.currentWeek === state.selectedWeek) {
-    todayColumnIndex = (today.getDay() + 6) % 7; // 0 = Mon, 6 = Sun
-  }
+  const todayColumnIndex = (state.currentWeek === state.selectedWeek)
+    ? getIsoDayOfWeek(new Date()) - 1
+    : null;
 
   dates.forEach((d, idx) => {
     const isToday = (todayColumnIndex === idx);
     const cell = document.createElement('div');
     cell.className = `day-header-cell ${isToday ? 'today' : ''}`;
-    const m = (d.getMonth() + 1).toString().padStart(2, '0');
-    const dayDate = d.getDate().toString().padStart(2, '0');
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const dayDate = String(d.getDate()).padStart(2, '0');
     cell.innerHTML = `
       <span class="day-name">${DAY_NAMES[idx]}</span>
       <span class="day-date">${m}/${dayDate}</span>
@@ -308,12 +333,6 @@ function renderWeekGrid() {
     sidebar.appendChild(cell);
   });
 
-  // Grid Height (Sync both sidebar and grid content to ensure 1:1 scrollable height)
-  const totalGridHeight = state.periods.length * rowHeight;
-  sidebar.style.height = `${totalGridHeight}px`;
-  const gridContent = document.getElementById('grid-content');
-  gridContent.style.height = `${totalGridHeight}px`;
-
   // Render Column Overlay with Today Highlight
   const colsOverlay = document.getElementById('grid-cols-overlay');
   colsOverlay.innerHTML = '';
@@ -324,59 +343,24 @@ function renderWeekGrid() {
   }
 
   // Render Course Cards
-  renderCourseCards(rowHeight);
+  renderCourseCards();
 
   // Update Red Current Time Line
   updateCurrentTimeIndicator();
 }
 
-function applyRowHeightToGrid(rowHeight) {
-  document.documentElement.style.setProperty('--cell-height', `${rowHeight}px`);
-  const totalGridHeight = state.periods.length * rowHeight;
-
-  const sidebar = document.getElementById('timeline-sidebar');
-  if (sidebar) sidebar.style.height = `${totalGridHeight}px`;
-
-  const gridContent = document.getElementById('grid-content');
-  if (gridContent) gridContent.style.height = `${totalGridHeight}px`;
-
-  document.querySelectorAll('#course-cells-layer .course-cell-card').forEach((card) => {
-    const startRow = Number(card.dataset.startRow || 0);
-    const span = Number(card.dataset.span || 1);
-    card.style.top = `${startRow * rowHeight + 2}px`;
-    card.style.height = `${span * rowHeight - 4}px`;
-  });
-
-  updateCurrentTimeIndicator();
-}
-
-function renderCourseCards(rowHeight) {
+function renderCourseCards() {
   const container = document.getElementById('course-cells-layer');
   container.innerHTML = '';
 
   const showNonCurrent = state.settings.showNonCurrentWeekCourses ?? true;
-
-  // Flatten sessions with recurrence status
   const visibleItems = [];
 
-  state.courses.forEach((item) => {
-    const { course, sessions } = item;
+  state.courses.forEach(({ course, sessions }) => {
     sessions.forEach((sess) => {
-      const activeWeeks = resolveWeeks(
-        sess.weekType,
-        sess.startWeek,
-        sess.endWeek,
-        sess.customWeeks,
-        state.totalWeeks
-      );
-      const isCurrentWeek = activeWeeks.has(state.selectedWeek);
-
+      const isCurrentWeek = isSessionInWeek(sess, state.selectedWeek, state.totalWeeks);
       if (isCurrentWeek || showNonCurrent) {
-        visibleItems.push({
-          course,
-          session: sess,
-          isCurrentWeek
-        });
+        visibleItems.push({ course, session: sess, isCurrentWeek });
       }
     });
   });
@@ -384,28 +368,22 @@ function renderCourseCards(rowHeight) {
   // Render non-current week courses first so current week courses always sit on top
   visibleItems.sort((a, b) => Number(a.isCurrentWeek) - Number(b.isCurrentWeek));
 
-  visibleItems.forEach((item) => {
-    const { course, session, isCurrentWeek } = item;
+  visibleItems.forEach(({ course, session, isCurrentWeek }) => {
     const dayIdx = session.dayOfWeek - 1; // 0..6
     if (dayIdx < 0 || dayIdx > 6) return;
 
     const startRow = session.startPeriod - 1;
-    const span = (session.endPeriod - session.startPeriod + 1);
-
-    const topPx = startRow * rowHeight + 2;
-    const heightPx = span * rowHeight - 4;
+    const span = session.endPeriod - session.startPeriod + 1;
     const leftPercent = dayIdx * (100 / 7);
-    const widthPercent = (100 / 7);
+    const widthPercent = 100 / 7;
 
     const hexColor = intToHexColor(course.color);
     const textColor = getContrastTextColor(hexColor);
 
     const card = document.createElement('div');
     card.className = `course-cell-card ${!isCurrentWeek ? 'non-current' : ''}`;
-    card.dataset.startRow = String(startRow);
-    card.dataset.span = String(span);
-    card.style.top = `${topPx}px`;
-    card.style.height = `${heightPx}px`;
+    card.style.setProperty('--start-row', String(startRow));
+    card.style.setProperty('--span', String(span));
     card.style.left = `calc(${leftPercent}% + 2px)`;
     card.style.width = `calc(${widthPercent}% - 4px)`;
     card.style.backgroundColor = hexColor;
@@ -442,42 +420,22 @@ function updateCurrentTimeIndicator() {
 
   const now = new Date();
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
-
-  const sortedPeriods = [...state.periods].sort((a, b) => a.periodNumber - b.periodNumber);
-  const firstPeriod = sortedPeriods[0];
-  const lastPeriod = sortedPeriods[sortedPeriods.length - 1];
-
-  const [fH, fM] = firstPeriod.startTime.split(':').map(Number);
-  const [lH, lM] = lastPeriod.endTime.split(':').map(Number);
-  const startMins = fH * 60 + fM;
-  const endMins = lH * 60 + lM;
-
-  if (currentMinutes < startMins || currentMinutes > endMins) {
-    lineEl.style.display = 'none';
-    return;
-  }
-
-  const rowHeight = (state.settings.courseCellHeightDp || 88);
+  const periods = state.periods;
   let offsetRows = null;
 
-  for (let i = 0; i < sortedPeriods.length; i++) {
-    const p = sortedPeriods[i];
-    const [sH, sM] = p.startTime.split(':').map(Number);
-    const [eH, eM] = p.endTime.split(':').map(Number);
-    const pStart = sH * 60 + sM;
-    const pEnd = eH * 60 + eM;
+  for (let i = 0; i < periods.length; i++) {
+    const p = periods[i];
+    const pStart = timeToMinutes(p.startTime);
+    const pEnd = timeToMinutes(p.endTime);
 
     if (currentMinutes >= pStart && currentMinutes < pEnd) {
-      const duration = pEnd - pStart;
-      const elapsed = currentMinutes - pStart;
-      offsetRows = i + (elapsed / duration);
+      offsetRows = i + ((currentMinutes - pStart) / Math.max(1, pEnd - pStart));
       break;
     }
 
-    const nextP = sortedPeriods[i + 1];
+    const nextP = periods[i + 1];
     if (nextP) {
-      const [nsH, nsM] = nextP.startTime.split(':').map(Number);
-      const nextStart = nsH * 60 + nsM;
+      const nextStart = timeToMinutes(nextP.startTime);
       if (currentMinutes >= pEnd && currentMinutes < nextStart) {
         offsetRows = i + 1;
         break;
@@ -486,8 +444,7 @@ function updateCurrentTimeIndicator() {
   }
 
   if (offsetRows != null) {
-    const topPx = offsetRows * rowHeight;
-    lineEl.style.top = `${topPx}px`;
+    lineEl.style.setProperty('--offset-rows', String(offsetRows));
     lineEl.style.display = 'block';
   } else {
     lineEl.style.display = 'none';
@@ -498,22 +455,14 @@ function updateCurrentTimeIndicator() {
 function bindEvents() {
   // Week navigation arrows
   document.getElementById('btn-prev-week').addEventListener('click', () => {
-    if (state.selectedWeek > 1) {
-      state.selectedWeek--;
-      renderTopBar();
-      renderWeekGrid();
-    }
+    goToWeek(state.selectedWeek - 1);
   });
 
   document.getElementById('btn-next-week').addEventListener('click', () => {
-    if (state.selectedWeek < state.totalWeeks) {
-      state.selectedWeek++;
-      renderTopBar();
-      renderWeekGrid();
-    }
+    goToWeek(state.selectedWeek + 1);
   });
 
-  // Home Menu Sheet button
+  // Home Menu Sheet button & quick add course
   document.getElementById('btn-open-menu').addEventListener('click', openHomeMenuSheet);
   document.getElementById('btn-add-course').addEventListener('click', () => {
     if (!state.activeTimetable) {
@@ -526,34 +475,26 @@ function bindEvents() {
   // Touch Swipe for Week Navigation
   initTouchSwipe();
 
-  // Bottom Sheet backdrop click
-  document.getElementById('home-menu-backdrop').addEventListener('click', (e) => {
-    if (e.target.id === 'home-menu-backdrop') closeHomeMenuSheet();
-  });
-  document.getElementById('course-detail-backdrop').addEventListener('click', (e) => {
-    if (e.target.id === 'course-detail-backdrop') closeCourseDetailSheet();
-  });
-
-  // Modal Overlays backdrop click (tap outside modal dialog to dismiss)
-  document.querySelectorAll('.modal-overlay').forEach((overlay) => {
+  // Unified backdrop click handler for all modals and bottom sheets
+  document.querySelectorAll('.modal-overlay, .sheet-backdrop').forEach((overlay) => {
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) {
-        overlay.classList.remove('visible');
+        hideModal(overlay.id);
       }
     });
   });
 
   // Home Menu Sheet Actions
   document.getElementById('menu-tile-timetable').addEventListener('click', () => {
-    closeHomeMenuSheet();
+    hideModal('home-menu-backdrop');
     openTimetableListModal();
   });
   document.getElementById('menu-tile-schedule').addEventListener('click', () => {
-    closeHomeMenuSheet();
+    hideModal('home-menu-backdrop');
     openScheduleListModal();
   });
   document.getElementById('menu-tile-settings').addEventListener('click', () => {
-    closeHomeMenuSheet();
+    hideModal('home-menu-backdrop');
     openSettingsModal();
   });
 
@@ -562,11 +503,7 @@ function bindEvents() {
   weekSlider.addEventListener('input', (e) => {
     const val = parseInt(e.target.value, 10);
     document.getElementById('menu-week-slider-label').textContent = `第 ${val} 周 / 共 ${state.totalWeeks} 周`;
-    if (val !== state.selectedWeek) {
-      state.selectedWeek = val;
-      renderTopBar();
-      renderWeekGrid();
-    }
+    goToWeek(val);
   });
 
   // Empty state buttons
@@ -575,13 +512,11 @@ function bindEvents() {
   });
 
   // Timetable List Modal buttons
-  document.getElementById('btn-close-timetable-list').addEventListener('click', closeTimetableListModal);
-  document.getElementById('btn-add-timetable-new').addEventListener('click', () => {
-    openTimetableEditorModal();
-  });
+  document.getElementById('btn-close-timetable-list').addEventListener('click', () => hideModal('timetable-list-modal'));
+  document.getElementById('btn-add-timetable-new').addEventListener('click', () => openTimetableEditorModal());
 
   // Timetable Editor Modal buttons
-  document.getElementById('btn-close-timetable-editor').addEventListener('click', closeTimetableEditorModal);
+  document.getElementById('btn-close-timetable-editor').addEventListener('click', () => hideModal('timetable-editor-modal'));
   document.getElementById('btn-save-timetable').addEventListener('click', saveTimetableForm);
   document.getElementById('btn-import-timetable-csv').addEventListener('click', () => {
     document.getElementById('input-file-timetable-csv').click();
@@ -590,20 +525,16 @@ function bindEvents() {
   document.getElementById('btn-export-timetable-csv').addEventListener('click', handleTimetableCsvExport);
 
   // Schedule List Modal buttons
-  document.getElementById('btn-close-schedule-list').addEventListener('click', closeScheduleListModal);
-  document.getElementById('btn-add-schedule-new').addEventListener('click', () => {
-    openScheduleEditorModal();
-  });
+  document.getElementById('btn-close-schedule-list').addEventListener('click', () => hideModal('schedule-list-modal'));
+  document.getElementById('btn-add-schedule-new').addEventListener('click', () => openScheduleEditorModal());
 
   // Schedule Editor Modal buttons
-  document.getElementById('btn-close-schedule-editor').addEventListener('click', closeScheduleEditorModal);
+  document.getElementById('btn-close-schedule-editor').addEventListener('click', () => hideModal('schedule-editor-modal'));
   document.getElementById('btn-save-schedule').addEventListener('click', saveScheduleForm);
   document.getElementById('btn-generate-periods').addEventListener('click', autoGeneratePeriods);
   document.getElementById('btn-add-period-row').addEventListener('click', () => addPeriodRow());
   document.getElementById('btn-restore-14-periods')?.addEventListener('click', () => {
-    const container = document.getElementById('period-rows-container');
-    container.innerHTML = '';
-    STANDARD_14_PERIODS.forEach(p => addPeriodRow(p.startTime, p.endTime));
+    fillPeriodRows(STANDARD_14_PERIODS);
   });
   document.getElementById('btn-import-schedule-csv').addEventListener('click', () => {
     document.getElementById('input-file-schedule-csv').click();
@@ -612,45 +543,39 @@ function bindEvents() {
   document.getElementById('btn-export-schedule-csv').addEventListener('click', handleScheduleCsvExport);
 
   // Course List Modal buttons
-  document.getElementById('btn-close-course-list').addEventListener('click', closeCourseListModal);
+  document.getElementById('btn-close-course-list').addEventListener('click', () => hideModal('course-list-modal'));
   document.getElementById('btn-add-course-list').addEventListener('click', () => {
     openCourseEditorModal(null, state.managingCourseTimetableId);
   });
 
   // Course Editor Modal buttons
-  document.getElementById('btn-close-course-editor').addEventListener('click', closeCourseEditorModal);
+  document.getElementById('btn-close-course-editor').addEventListener('click', () => hideModal('course-editor-modal'));
   document.getElementById('btn-save-course').addEventListener('click', saveCourseForm);
   document.getElementById('btn-add-session-row').addEventListener('click', () => addSessionEditorCard());
 
   // Course Detail Sheet buttons
-  document.getElementById('btn-close-course-detail').addEventListener('click', closeCourseDetailSheet);
+  document.getElementById('btn-close-course-detail').addEventListener('click', () => hideModal('course-detail-backdrop'));
   document.getElementById('btn-edit-course-from-detail').addEventListener('click', () => {
     if (state.selectedCourseDetail) {
-      const cid = state.selectedCourseDetail.course.id;
-      const tid = state.selectedCourseDetail.course.timetableId;
-      closeCourseDetailSheet();
+      const { id: cid, timetableId: tid } = state.selectedCourseDetail;
+      hideModal('course-detail-backdrop');
       openCourseEditorModal(cid, tid);
     }
   });
 
   // Settings Modal buttons
-  document.getElementById('btn-close-settings').addEventListener('click', closeSettingsModal);
+  document.getElementById('btn-close-settings').addEventListener('click', () => hideModal('settings-modal'));
   bindSettingsEvents();
 
   // Conflict Dialog buttons
   document.getElementById('btn-conflict-cancel').addEventListener('click', () => {
-    document.getElementById('conflict-dialog-overlay').classList.remove('visible');
-    state.pendingForceSaveCourse = null;
+    hideModal('conflict-dialog-overlay');
   });
   document.getElementById('btn-conflict-confirm').addEventListener('click', async () => {
-    document.getElementById('conflict-dialog-overlay').classList.remove('visible');
-    if (state.pendingForceSaveCourse) {
-      const { courseData, sessionsData } = state.pendingForceSaveCourse;
-      await saveCourseWithSessions(courseData, sessionsData);
-      state.pendingForceSaveCourse = null;
-      closeCourseEditorModal();
-      await refreshAll();
-      showFluidCloudToast('保存成功', '课程已强制保存');
+    const pending = state.pendingForceSaveCourse;
+    hideModal('conflict-dialog-overlay');
+    if (pending) {
+      await commitCourseSave(pending.courseData, pending.sessionsData, '课程已强制保存');
     }
   });
 
@@ -662,6 +587,20 @@ function getMaxPeriodFromList(periods) {
   return periods && periods.length > 0
     ? periods[periods.length - 1].periodNumber
     : DEFAULT_MAX_PERIOD;
+}
+
+async function getMaxPeriodForSchedule(scheduleId) {
+  const periods = await getPeriodsBySchedule(scheduleId);
+  return getMaxPeriodFromList(periods);
+}
+
+function reindexChildren(containerId, labelSelector, formatLabel) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  Array.from(container.children).forEach((child, idx) => {
+    const labelEl = child.querySelector(labelSelector);
+    if (labelEl) labelEl.textContent = formatLabel(idx + 1);
+  });
 }
 
 async function importCourseRowsToTimetable(timetableId, rows, defaultNote = '') {
@@ -712,14 +651,8 @@ function initScreenshotCsvFeature() {
 
   if (!modal || !openBtn) return;
 
-  // Open & Close
-  openBtn.addEventListener('click', () => {
-    modal.classList.add('visible');
-  });
-
-  closeBtn.addEventListener('click', () => {
-    modal.classList.remove('visible');
-  });
+  openBtn.addEventListener('click', () => showModal('screenshot-csv-modal'));
+  closeBtn.addEventListener('click', () => hideModal('screenshot-csv-modal'));
 
   // Tab switching
   const tabImage = document.getElementById('tab-btn-image-mode');
@@ -727,19 +660,15 @@ function initScreenshotCsvFeature() {
   const panelImage = document.getElementById('panel-image-mode');
   const panelText = document.getElementById('panel-text-mode');
 
-  tabImage.addEventListener('click', () => {
-    tabImage.className = 'btn btn-sm btn-primary';
-    tabText.className = 'btn btn-sm btn-outlined';
-    panelImage.style.display = 'flex';
-    panelText.style.display = 'none';
-  });
+  const switchOcrTab = (isImageMode) => {
+    tabImage.className = `btn btn-sm ${isImageMode ? 'btn-primary' : 'btn-outlined'}`;
+    tabText.className = `btn btn-sm ${!isImageMode ? 'btn-primary' : 'btn-outlined'}`;
+    panelImage.style.display = isImageMode ? 'flex' : 'none';
+    panelText.style.display = !isImageMode ? 'flex' : 'none';
+  };
 
-  tabText.addEventListener('click', () => {
-    tabText.className = 'btn btn-sm btn-primary';
-    tabImage.className = 'btn btn-sm btn-outlined';
-    panelText.style.display = 'flex';
-    panelImage.style.display = 'none';
-  });
+  tabImage.addEventListener('click', () => switchOcrTab(true));
+  tabText.addEventListener('click', () => switchOcrTab(false));
 
   // Drag & drop file selection
   const dropzone = document.getElementById('dropzone-screenshot');
@@ -762,16 +691,16 @@ function initScreenshotCsvFeature() {
 
   dropzone.addEventListener('dragover', (e) => {
     e.preventDefault();
-    dropzone.style.borderColor = 'var(--primary)';
+    dropzone.classList.add('drag-active');
   });
 
   dropzone.addEventListener('dragleave', () => {
-    dropzone.style.borderColor = 'var(--outline)';
+    dropzone.classList.remove('drag-active');
   });
 
   dropzone.addEventListener('drop', (e) => {
     e.preventDefault();
-    dropzone.style.borderColor = 'var(--outline)';
+    dropzone.classList.remove('drag-active');
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       handleImageFile(e.dataTransfer.files[0]);
     }
@@ -936,7 +865,7 @@ function initScreenshotCsvFeature() {
     const rows = Array.from(tbody.children);
     const records = [];
 
-    rows.forEach(tr => {
+    rows.forEach((tr) => {
       const name = tr.querySelector('.p-name').value.trim();
       if (!name) return;
       const day = parseInt(tr.querySelector('.p-day').value, 10);
@@ -973,7 +902,7 @@ function initScreenshotCsvFeature() {
     showFluidCloudToast('导出成功', '已生成并下载 SleepIn 标准 CSV 课表文件！');
   });
 
-  // Import to Active Timetable
+  // Import to Active Timetable directly without round-tripping through CSV serialization
   document.getElementById('btn-import-parsed-to-active').addEventListener('click', async () => {
     if (!state.activeTimetable) {
       alert('请先选择或创建一个当前激活的课程表！');
@@ -990,14 +919,20 @@ function initScreenshotCsvFeature() {
       return;
     }
 
-    // Convert and import
-    const csvStr = convertRecordsToSleepInCsv(records);
-    const periods = await getPeriodsBySchedule(state.activeTimetable.scheduleId);
-    const maxPeriod = getMaxPeriodFromList(periods);
+    const maxPeriod = await getMaxPeriodForSchedule(state.activeTimetable.scheduleId);
+    const rows = [];
+    const errors = [];
 
-    const { rows, errors } = parseCourseCsv(csvStr, state.totalWeeks, maxPeriod);
+    records.forEach((rec, idx) => {
+      try {
+        rows.push(validateAndBuildCourseRow(rec, state.totalWeeks, maxPeriod));
+      } catch (err) {
+        errors.push({ rowNumber: idx + 1, message: err.message });
+      }
+    });
+
     if (errors.length > 0) {
-      alert(`导入校验存在问题：\n${errors.map(e => e.message).join('\n')}`);
+      alert(`导入校验存在问题：\n${formatCsvErrors(errors)}`);
       return;
     }
 
@@ -1007,7 +942,7 @@ function initScreenshotCsvFeature() {
       '截图智能导入'
     );
 
-    modal.classList.remove('visible');
+    hideModal('screenshot-csv-modal');
     await refreshAll();
     showFluidCloudToast('导入成功', `成功将 ${importedCourseCount} 门课程导入到当前课表！`);
   });
@@ -1030,22 +965,12 @@ function initTouchSwipe() {
 
   scrollArea.addEventListener('touchend', (e) => {
     if (!isSwiping || e.changedTouches.length !== 1) return;
-    const endX = e.changedTouches[0].clientX;
-    const endY = e.changedTouches[0].clientY;
-    const deltaX = endX - startX;
-    const deltaY = endY - startY;
+    const deltaX = e.changedTouches[0].clientX - startX;
+    const deltaY = e.changedTouches[0].clientY - startY;
 
     // Must be predominantly horizontal with min threshold of 50px
     if (Math.abs(deltaX) > 50 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
-      if (deltaX < 0 && state.selectedWeek < state.totalWeeks) {
-        state.selectedWeek++;
-        renderTopBar();
-        renderWeekGrid();
-      } else if (deltaX > 0 && state.selectedWeek > 1) {
-        state.selectedWeek--;
-        renderTopBar();
-        renderWeekGrid();
-      }
+      goToWeek(state.selectedWeek + (deltaX < 0 ? 1 : -1));
     }
     isSwiping = false;
   }, { passive: true });
@@ -1069,7 +994,7 @@ function openHomeMenuSheet() {
     const tid = parseInt(e.target.value, 10);
     await setActiveTimetable(tid);
     await refreshAll();
-    closeHomeMenuSheet();
+    hideModal('home-menu-backdrop');
   };
 
   const scheduleNameEl = document.getElementById('menu-schedule-name');
@@ -1085,37 +1010,22 @@ function openHomeMenuSheet() {
   slider.value = state.selectedWeek;
   document.getElementById('menu-week-slider-label').textContent = `第 ${state.selectedWeek} 周 / 共 ${state.totalWeeks} 周`;
 
-  document.getElementById('home-menu-backdrop').classList.add('visible');
-}
-
-function closeHomeMenuSheet() {
-  document.getElementById('home-menu-backdrop').classList.remove('visible');
+  showModal('home-menu-backdrop');
 }
 
 // ---------------- Course Detail Sheet ----------------
 function openCourseDetailSheet(course, session, isCurrentWeek) {
-  state.selectedCourseDetail = { course, session, isCurrentWeek };
+  state.selectedCourseDetail = { id: course.id, timetableId: course.timetableId };
 
   document.getElementById('detail-course-name').textContent = course.name;
   document.getElementById('detail-time').textContent = `${DAY_LABELS_FULL[session.dayOfWeek - 1]} 第${session.startPeriod}-${session.endPeriod}节`;
   document.getElementById('detail-current-status').textContent = isCurrentWeek ? '✅ 本周有课' : '⏸️ 非本周课程';
   document.getElementById('detail-location').textContent = session.location ? `地点: ${session.location}` : '地点: 暂无';
   document.getElementById('detail-teacher').textContent = course.teacher ? `教师: ${course.teacher}` : '教师: 暂无';
-
-  let weeksDesc = '所有周';
-  if (session.weekType === 'RANGE') {
-    weeksDesc = `第 ${session.startWeek || 1}-${session.endWeek || state.totalWeeks} 周`;
-  } else if (session.weekType === 'CUSTOM') {
-    weeksDesc = `第 ${(session.customWeeks || []).join(',')} 周`;
-  }
-  document.getElementById('detail-weeks').textContent = `上课周数: ${weeksDesc}`;
+  document.getElementById('detail-weeks').textContent = `上课周数: ${formatSessionWeeks(session, state.totalWeeks, 'ui')}`;
   document.getElementById('detail-note').textContent = course.note ? `备注: ${course.note}` : '';
 
-  document.getElementById('course-detail-backdrop').classList.add('visible');
-}
-
-function closeCourseDetailSheet() {
-  document.getElementById('course-detail-backdrop').classList.remove('visible');
+  showModal('course-detail-backdrop');
 }
 
 // ---------------- Timetable List & Editor ----------------
@@ -1133,7 +1043,7 @@ function openTimetableListModal() {
           ${escapeHtml(t.name)}
           ${t.isActive ? '<span class="entity-badge">当前课表</span>' : ''}
         </div>
-        <div class="entity-sub">开学: ${escapeHtml(t.startDate)} · 共 ${Number(t.totalWeeks) || 18} 周 · 作息: ${escapeHtml(sch ? sch.name : '默认')}</div>
+        <div class="entity-sub">开学: ${escapeHtml(t.startDate)} · 共 ${Number(t.totalWeeks) || DEFAULT_TOTAL_WEEKS} 周 · 作息: ${escapeHtml(sch ? sch.name : '默认')}</div>
       </div>
       <div class="entity-actions">
         ${!t.isActive ? `<button class="btn btn-sm btn-outlined btn-set-active">设为当前</button>` : ''}
@@ -1152,7 +1062,7 @@ function openTimetableListModal() {
     }
 
     item.querySelector('.btn-manage-courses').addEventListener('click', () => {
-      closeTimetableListModal();
+      hideModal('timetable-list-modal');
       openCourseListModal(t.id);
     });
 
@@ -1171,11 +1081,7 @@ function openTimetableListModal() {
     container.appendChild(item);
   });
 
-  document.getElementById('timetable-list-modal').classList.add('visible');
-}
-
-function closeTimetableListModal() {
-  document.getElementById('timetable-list-modal').classList.remove('visible');
+  showModal('timetable-list-modal');
 }
 
 async function openTimetableEditorModal(timetableId = null) {
@@ -1205,20 +1111,14 @@ async function openTimetableEditorModal(timetableId = null) {
     schSelect.value = tt.scheduleId;
   } else {
     document.getElementById('tt-form-name').value = '新学期课程表';
-    document.getElementById('tt-form-total-weeks').value = 18;
-    const today = formatLocalDate();
-    document.getElementById('tt-form-start-date').value = today;
+    document.getElementById('tt-form-total-weeks').value = DEFAULT_TOTAL_WEEKS;
+    document.getElementById('tt-form-start-date').value = formatLocalDate();
     if (state.allSchedules.length > 0) {
       schSelect.value = state.allSchedules[0].id;
     }
   }
 
-  document.getElementById('timetable-editor-modal').classList.add('visible');
-}
-
-function closeTimetableEditorModal() {
-  document.getElementById('timetable-editor-modal').classList.remove('visible');
-  state.editingTimetableId = null;
+  showModal('timetable-editor-modal');
 }
 
 async function saveTimetableForm() {
@@ -1255,7 +1155,7 @@ async function saveTimetableForm() {
     });
   }
 
-  closeTimetableEditorModal();
+  hideModal('timetable-editor-modal');
   await refreshAll();
   openTimetableListModal();
   showFluidCloudToast('保存成功', `课程表“${name}”已保存`);
@@ -1263,57 +1163,51 @@ async function saveTimetableForm() {
 
 async function handleTimetableCsvImport(e) {
   const file = e.target.files[0];
+  e.target.value = '';
   if (!file) return;
 
-  const reader = new FileReader();
-  reader.onload = async (evt) => {
-    try {
-      const rawCsv = evt.target.result;
-      const totalWeeks = parseInt(document.getElementById('tt-form-total-weeks').value, 10) || 18;
-      const scheduleId = parseInt(document.getElementById('tt-form-schedule').value, 10);
-      const periods = await getPeriodsBySchedule(scheduleId);
-      const maxPeriod = getMaxPeriodFromList(periods);
+  try {
+    const rawCsv = await file.text();
+    const totalWeeks = parseInt(document.getElementById('tt-form-total-weeks').value, 10) || DEFAULT_TOTAL_WEEKS;
+    const scheduleId = parseInt(document.getElementById('tt-form-schedule').value, 10);
+    const maxPeriod = await getMaxPeriodForSchedule(scheduleId);
 
-      const { rows, errors } = parseCourseCsv(rawCsv, totalWeeks, maxPeriod);
+    const { rows, errors } = parseCourseCsv(rawCsv, totalWeeks, maxPeriod);
 
-      if (errors.length > 0) {
-        const errLines = errors.map(er => `第 ${er.rowNumber} 行: ${er.message}`).join('\n');
-        alert(`CSV 解析存在错误:\n${errLines}`);
-      }
-
-      if (rows.length === 0) {
-        alert('CSV 中未解析到有效课程记录');
-        return;
-      }
-
-      // Create new timetable and set it as the sole active timetable
-      const name = document.getElementById('tt-form-name').value.trim() || file.name.replace(/\.[^/.]+$/, '');
-      const startDate = document.getElementById('tt-form-start-date').value || formatLocalDate();
-      const now = Date.now();
-
-      const timetableId = await addTimetable({
-        name,
-        totalWeeks,
-        startDate,
-        scheduleId,
-        colorScheme: 'default',
-        isActive: false,
-        createdAt: now,
-        updatedAt: now
-      });
-
-      await setActiveTimetable(timetableId);
-      const importedCourseCount = await importCourseRowsToTimetable(timetableId, rows, '');
-
-      closeTimetableEditorModal();
-      await refreshAll();
-      showFluidCloudToast('导入成功', `成功导入 ${importedCourseCount} 门课程并激活课表`);
-    } catch (err) {
-      alert(`导入异常: ${err.message}`);
+    if (errors.length > 0) {
+      alert(`CSV 解析存在错误:\n${formatCsvErrors(errors)}`);
     }
-  };
-  reader.readAsText(file, 'utf-8');
-  e.target.value = '';
+
+    if (rows.length === 0) {
+      alert('CSV 中未解析到有效课程记录');
+      return;
+    }
+
+    // Create new timetable and set it as the sole active timetable
+    const name = document.getElementById('tt-form-name').value.trim() || stripFileExtension(file.name);
+    const startDate = document.getElementById('tt-form-start-date').value || formatLocalDate();
+    const now = Date.now();
+
+    const timetableId = await addTimetable({
+      name,
+      totalWeeks,
+      startDate,
+      scheduleId,
+      colorScheme: 'default',
+      isActive: false,
+      createdAt: now,
+      updatedAt: now
+    });
+
+    await setActiveTimetable(timetableId);
+    const importedCourseCount = await importCourseRowsToTimetable(timetableId, rows, '');
+
+    hideModal('timetable-editor-modal');
+    await refreshAll();
+    showFluidCloudToast('导入成功', `成功导入 ${importedCourseCount} 门课程并激活课表`);
+  } catch (err) {
+    alert(`导入异常: ${err.message}`);
+  }
 }
 
 async function handleTimetableCsvExport() {
@@ -1325,7 +1219,7 @@ async function handleTimetableCsvExport() {
   const csvContent = exportCourseCsv(coursesWithSessions, tt.totalWeeks);
 
   downloadFile(`${tt.name}_课程表.csv`, 'text/csv;charset=utf-8', csvContent);
-  showFluidCloudToast('导出成功', `课程表已导出为 CSV 文件`);
+  showFluidCloudToast('导出成功', '课程表已导出为 CSV 文件');
 }
 
 // ---------------- Schedule List & Editor ----------------
@@ -1367,11 +1261,14 @@ function openScheduleListModal() {
     container.appendChild(item);
   });
 
-  document.getElementById('schedule-list-modal').classList.add('visible');
+  showModal('schedule-list-modal');
 }
 
-function closeScheduleListModal() {
-  document.getElementById('schedule-list-modal').classList.remove('visible');
+function fillPeriodRows(periods = STANDARD_14_PERIODS) {
+  const rowsContainer = document.getElementById('period-rows-container');
+  rowsContainer.innerHTML = '';
+  const list = (periods && periods.length > 0) ? periods : STANDARD_14_PERIODS;
+  list.forEach(p => addPeriodRow(p.startTime, p.endTime));
 }
 
 async function openScheduleEditorModal(scheduleId = null) {
@@ -1382,31 +1279,18 @@ async function openScheduleEditorModal(scheduleId = null) {
   document.getElementById('btn-export-schedule-csv').style.display = isEdit ? 'inline-flex' : 'none';
   document.getElementById('btn-import-schedule-csv').style.display = !isEdit ? 'inline-flex' : 'none';
 
-  const rowsContainer = document.getElementById('period-rows-container');
-  rowsContainer.innerHTML = '';
-
   if (isEdit) {
     const sch = await getScheduleById(scheduleId);
     if (!sch) return;
     document.getElementById('sch-form-name').value = sch.name;
     const periods = await getPeriodsBySchedule(scheduleId);
-    if (periods && periods.length > 0) {
-      periods.forEach(p => addPeriodRow(p.startTime, p.endTime));
-    } else {
-      STANDARD_14_PERIODS.forEach(p => addPeriodRow(p.startTime, p.endTime));
-    }
+    fillPeriodRows(periods);
   } else {
     document.getElementById('sch-form-name').value = '标准作息表';
-    // Defaults: 标准 14 节作息
-    STANDARD_14_PERIODS.forEach(p => addPeriodRow(p.startTime, p.endTime));
+    fillPeriodRows(STANDARD_14_PERIODS);
   }
 
-  document.getElementById('schedule-editor-modal').classList.add('visible');
-}
-
-function closeScheduleEditorModal() {
-  document.getElementById('schedule-editor-modal').classList.remove('visible');
-  state.editingScheduleId = null;
+  showModal('schedule-editor-modal');
 }
 
 function autoGeneratePeriods() {
@@ -1415,20 +1299,14 @@ function autoGeneratePeriods() {
   const breakMin = parseInt(document.getElementById('gen-break').value, 10) || 10;
   const total = parseInt(document.getElementById('gen-count').value, 10) || DEFAULT_MAX_PERIOD;
 
-  const [h, m] = startStr.split(':').map(Number);
-  let curMins = h * 60 + m;
+  let curMins = timeToMinutes(startStr);
 
   const container = document.getElementById('period-rows-container');
   container.innerHTML = '';
 
   for (let i = 1; i <= total; i++) {
-    const startH = Math.floor(curMins / 60).toString().padStart(2, '0');
-    const startM = (curMins % 60).toString().padStart(2, '0');
     const endTotalMins = curMins + duration;
-    const endH = Math.floor(endTotalMins / 60).toString().padStart(2, '0');
-    const endM = (endTotalMins % 60).toString().padStart(2, '0');
-
-    addPeriodRow(`${startH}:${startM}`, `${endH}:${endM}`);
+    addPeriodRow(minutesToTime(curMins), minutesToTime(endTotalMins));
 
     // Extra lunch & dinner breaks
     if (i === 4) {
@@ -1466,17 +1344,10 @@ function addPeriodRow(startTime = '08:00', endTime = '08:45') {
 
   row.querySelector('.btn-del-period').addEventListener('click', () => {
     row.remove();
-    reindexPeriodRows();
+    reindexChildren('period-rows-container', '.period-index-label', n => `第 ${n} 节`);
   });
 
   container.appendChild(row);
-}
-
-function reindexPeriodRows() {
-  const container = document.getElementById('period-rows-container');
-  Array.from(container.children).forEach((child, idx) => {
-    child.querySelector('.period-index-label').textContent = `第 ${idx + 1} 节`;
-  });
 }
 
 async function saveScheduleForm() {
@@ -1505,16 +1376,15 @@ async function saveScheduleForm() {
     const sch = await getScheduleById(scheduleId);
     sch.name = name;
     await updateSchedule(sch);
-    await replaceSchedulePeriods(scheduleId, periods);
   } else {
     scheduleId = await addSchedule({
       name,
       createdAt: Date.now()
     });
-    await replaceSchedulePeriods(scheduleId, periods);
   }
+  await replaceSchedulePeriods(scheduleId, periods);
 
-  closeScheduleEditorModal();
+  hideModal('schedule-editor-modal');
   await refreshAll();
   openScheduleListModal();
   showFluidCloudToast('保存成功', `作息表“${name}”已保存`);
@@ -1522,41 +1392,36 @@ async function saveScheduleForm() {
 
 async function handleScheduleCsvImport(e) {
   const file = e.target.files[0];
+  e.target.value = '';
   if (!file) return;
 
-  const reader = new FileReader();
-  reader.onload = async (evt) => {
-    try {
-      const rawCsv = evt.target.result;
-      const { scheduleName, periods, errors } = parseScheduleCsv(rawCsv);
+  try {
+    const rawCsv = await file.text();
+    const { scheduleName, periods, errors } = parseScheduleCsv(rawCsv);
 
-      if (errors.length > 0) {
-        const errLines = errors.map(er => `第 ${er.rowNumber} 行: ${er.message}`).join('\n');
-        alert(`CSV 解析存在错误:\n${errLines}`);
-      }
-
-      if (periods.length === 0) {
-        alert('未解析到有效课节数据');
-        return;
-      }
-
-      const finalScheduleName = scheduleName || file.name.replace(/\.[^/.]+$/, '');
-      const schId = await addSchedule({
-        name: finalScheduleName,
-        createdAt: Date.now()
-      });
-      await replaceSchedulePeriods(schId, periods);
-
-      closeScheduleEditorModal();
-      await refreshAll();
-      openScheduleListModal();
-      showFluidCloudToast('导入成功', `成功导入作息表“${finalScheduleName}”`);
-    } catch (err) {
-      alert(`导入异常: ${err.message}`);
+    if (errors.length > 0) {
+      alert(`CSV 解析存在错误:\n${formatCsvErrors(errors)}`);
     }
-  };
-  reader.readAsText(file, 'utf-8');
-  e.target.value = '';
+
+    if (periods.length === 0) {
+      alert('未解析到有效课节数据');
+      return;
+    }
+
+    const finalScheduleName = scheduleName || stripFileExtension(file.name);
+    const schId = await addSchedule({
+      name: finalScheduleName,
+      createdAt: Date.now()
+    });
+    await replaceSchedulePeriods(schId, periods);
+
+    hideModal('schedule-editor-modal');
+    await refreshAll();
+    openScheduleListModal();
+    showFluidCloudToast('导入成功', `成功导入作息表“${finalScheduleName}”`);
+  } catch (err) {
+    alert(`导入异常: ${err.message}`);
+  }
 }
 
 async function handleScheduleCsvExport() {
@@ -1568,7 +1433,7 @@ async function handleScheduleCsvExport() {
   const csvContent = exportScheduleCsv(sch.name, periods);
 
   downloadFile(`${sch.name}_作息表.csv`, 'text/csv;charset=utf-8', csvContent);
-  showFluidCloudToast('导出成功', `作息表已导出为 CSV 文件`);
+  showFluidCloudToast('导出成功', '作息表已导出为 CSV 文件');
 }
 
 // ---------------- Course List & Editor ----------------
@@ -1586,11 +1451,8 @@ function openCourseListModal(timetableId) {
       return;
     }
 
-    list.forEach((item) => {
-      const { course, sessions } = item;
-      const sessionSummary = sessions.map(s => {
-        return `${DAY_NAMES[s.dayOfWeek - 1]} 第${s.startPeriod}-${s.endPeriod}节`;
-      }).join('； ');
+    list.forEach(({ course, sessions }) => {
+      const sessionSummary = sessions.map(s => `${DAY_NAMES[s.dayOfWeek - 1]} 第${s.startPeriod}-${s.endPeriod}节`).join('； ');
 
       const row = document.createElement('div');
       row.className = 'entity-list-item';
@@ -1624,31 +1486,27 @@ function openCourseListModal(timetableId) {
     });
   });
 
-  document.getElementById('course-list-modal').classList.add('visible');
-}
-
-function closeCourseListModal() {
-  document.getElementById('course-list-modal').classList.remove('visible');
-  state.managingCourseTimetableId = null;
+  showModal('course-list-modal');
 }
 
 async function openCourseEditorModal(courseId = null, timetableId = null) {
   state.editingCourseId = courseId;
-  state.managingCourseTimetableId = timetableId || (state.activeTimetable ? state.activeTimetable.id : null);
+  const resolvedTimetableId = timetableId || (state.activeTimetable ? state.activeTimetable.id : null);
+  state.managingCourseTimetableId = resolvedTimetableId;
 
-  // Resolve target timetable periods so non-active timetable course editing uses its own schedule
-  const targetTt = state.allTimetables.find(t => t.id === state.managingCourseTimetableId) || state.activeTimetable;
+  // Resolve target timetable's own maxPeriod and totalWeeks (even if editing a non-active timetable)
+  const targetTt = state.allTimetables.find(t => t.id === resolvedTimetableId) || state.activeTimetable;
   if (targetTt) {
-    const targetPeriods = await getPeriodsBySchedule(targetTt.scheduleId);
-    state.editingCourseMaxPeriod = getMaxPeriodFromList(targetPeriods);
+    state.editingCourseMaxPeriod = await getMaxPeriodForSchedule(targetTt.scheduleId);
+    state.editingCourseTotalWeeks = Number(targetTt.totalWeeks) || DEFAULT_TOTAL_WEEKS;
   } else {
     state.editingCourseMaxPeriod = getMaxPeriodFromList(state.periods);
+    state.editingCourseTotalWeeks = state.totalWeeks;
   }
 
   const isEdit = courseId != null;
   document.getElementById('course-editor-title').textContent = isEdit ? '编辑课程' : '新建课程';
 
-  // Render color swatches
   renderColorSwatches();
 
   const sessionsContainer = document.getElementById('sessions-editor-container');
@@ -1667,18 +1525,12 @@ async function openCourseEditorModal(courseId = null, timetableId = null) {
     document.getElementById('course-form-name').value = '';
     document.getElementById('course-form-teacher').value = '';
     document.getElementById('course-form-note').value = '';
-    selectColorSwatch(intToHexColor(DEFAULT_COURSE_COLORS[0]));
+    selectColorSwatch(DEFAULT_COURSE_COLOR_HEX);
 
-    // Add 1 default session
     addSessionEditorCard();
   }
 
-  document.getElementById('course-editor-modal').classList.add('visible');
-}
-
-function closeCourseEditorModal() {
-  document.getElementById('course-editor-modal').classList.remove('visible');
-  state.editingCourseId = null;
+  showModal('course-editor-modal');
 }
 
 function renderColorSwatches() {
@@ -1711,16 +1563,17 @@ function addSessionEditorCard(data = null) {
   const card = document.createElement('div');
   card.className = 'session-card';
 
+  const targetTotalWeeks = state.editingCourseTotalWeeks || state.totalWeeks;
+  const maxPeriod = state.editingCourseMaxPeriod || getMaxPeriodFromList(state.periods);
+
   const day = data ? data.dayOfWeek : 1;
   const startP = data ? data.startPeriod : 1;
   const endP = data ? data.endPeriod : 2;
   const loc = data ? (data.location || '') : '';
   const weekType = data ? data.weekType : 'ALL';
   const startW = data ? (data.startWeek || 1) : 1;
-  const endW = data ? (data.endWeek || state.totalWeeks) : state.totalWeeks;
+  const endW = data ? (data.endWeek || targetTotalWeeks) : targetTotalWeeks;
   const customW = data ? (data.customWeeks || []) : [];
-
-  const maxPeriod = state.editingCourseMaxPeriod || getMaxPeriodFromList(state.periods);
 
   let periodOptions = '';
   for (let p = 1; p <= maxPeriod; p++) {
@@ -1776,11 +1629,11 @@ function addSessionEditorCard(data = null) {
     <div class="session-range-fields form-row" style="display: ${weekType === 'RANGE' ? 'flex' : 'none'};">
       <div class="form-group">
         <label class="form-label">起始周</label>
-        <input type="number" class="form-control session-start-week" min="1" max="${state.totalWeeks}" value="${startW}">
+        <input type="number" class="form-control session-start-week" min="1" max="${targetTotalWeeks}" value="${startW}">
       </div>
       <div class="form-group">
         <label class="form-label">结束周</label>
-        <input type="number" class="form-control session-end-week" min="1" max="${state.totalWeeks}" value="${endW}">
+        <input type="number" class="form-control session-end-week" min="1" max="${targetTotalWeeks}" value="${endW}">
       </div>
     </div>
 
@@ -1792,14 +1645,13 @@ function addSessionEditorCard(data = null) {
         <button type="button" class="btn btn-sm btn-outlined btn-custom-clear">清空</button>
       </div>
       <div class="custom-weeks-grid">
-        ${Array.from({ length: state.totalWeeks }, (_, i) => i + 1).map(w => `
+        ${Array.from({ length: targetTotalWeeks }, (_, i) => i + 1).map(w => `
           <button type="button" class="week-num-btn ${customW.includes(w) ? 'active' : ''}" data-week="${w}">${w}</button>
         `).join('')}
       </div>
     </div>
   `;
 
-  // Set selects
   card.querySelector('.session-start-period').value = startP;
   card.querySelector('.session-end-period').value = endP;
 
@@ -1822,51 +1674,49 @@ function addSessionEditorCard(data = null) {
 
   // Custom week toggles
   const customGrid = card.querySelector('.custom-weeks-grid');
-  customGrid.querySelectorAll('.week-num-btn').forEach(btn => {
+  const weekBtns = customGrid.querySelectorAll('.week-num-btn');
+  weekBtns.forEach(btn => {
     btn.addEventListener('click', () => btn.classList.toggle('active'));
   });
 
   // Quick select buttons
-  card.querySelector('.btn-custom-all').addEventListener('click', () => {
-    customGrid.querySelectorAll('.week-num-btn').forEach(b => b.classList.add('active'));
-  });
-  card.querySelector('.btn-custom-odd').addEventListener('click', () => {
-    customGrid.querySelectorAll('.week-num-btn').forEach(b => {
-      const w = parseInt(b.dataset.week, 10);
-      b.classList.toggle('active', w % 2 === 1);
+  const quickSelectors = [
+    ['.btn-custom-all', () => true],
+    ['.btn-custom-odd', w => w % 2 === 1],
+    ['.btn-custom-even', w => w % 2 === 0],
+    ['.btn-custom-clear', () => false]
+  ];
+  for (const [sel, predicate] of quickSelectors) {
+    card.querySelector(sel).addEventListener('click', () => {
+      weekBtns.forEach(b => b.classList.toggle('active', predicate(parseInt(b.dataset.week, 10))));
     });
-  });
-  card.querySelector('.btn-custom-even').addEventListener('click', () => {
-    customGrid.querySelectorAll('.week-num-btn').forEach(b => {
-      const w = parseInt(b.dataset.week, 10);
-      b.classList.toggle('active', w % 2 === 0);
-    });
-  });
-  card.querySelector('.btn-custom-clear').addEventListener('click', () => {
-    customGrid.querySelectorAll('.week-num-btn').forEach(b => b.classList.remove('active'));
-  });
+  }
 
   // Delete button
   card.querySelector('.btn-del-session').addEventListener('click', () => {
     card.remove();
-    reindexSessionCards();
+    reindexChildren('sessions-editor-container', '.session-title-num', n => `时间段 ${n}`);
   });
 
   container.appendChild(card);
 }
 
-function reindexSessionCards() {
-  const container = document.getElementById('sessions-editor-container');
-  Array.from(container.children).forEach((child, idx) => {
-    child.querySelector('.session-title-num').textContent = `时间段 ${idx + 1}`;
-  });
+async function commitCourseSave(courseData, sessionsData, toastMsg) {
+  await saveCourseWithSessions(courseData, sessionsData);
+  const targetTimetableId = courseData.timetableId;
+  hideModal('course-editor-modal');
+  await refreshAll();
+  if (document.getElementById('course-list-modal').classList.contains('visible')) {
+    openCourseListModal(targetTimetableId);
+  }
+  showFluidCloudToast('保存成功', toastMsg);
 }
 
 async function saveCourseForm() {
   const name = document.getElementById('course-form-name').value.trim();
   const teacher = document.getElementById('course-form-teacher').value.trim();
   const note = document.getElementById('course-form-note').value.trim();
-  const colorHex = document.getElementById('course-custom-color').value || '#4A90D9';
+  const colorHex = document.getElementById('course-custom-color').value || DEFAULT_COURSE_COLOR_HEX;
   const colorInt = hexToIntColor(colorHex);
 
   if (!name) return alert('请输入课程名称');
@@ -1875,7 +1725,9 @@ async function saveCourseForm() {
   const cards = Array.from(container.children);
   if (cards.length === 0) return alert('请至少添加一个上课时间段');
 
+  const targetTotalWeeks = state.editingCourseTotalWeeks || state.totalWeeks;
   const sessions = [];
+
   for (let i = 0; i < cards.length; i++) {
     const card = cards[i];
     const activeDayPill = card.querySelector('.day-pill.active');
@@ -1897,7 +1749,7 @@ async function saveCourseForm() {
 
     if (weekType === 'RANGE') {
       startWeek = parseInt(card.querySelector('.session-start-week').value, 10) || 1;
-      endWeek = parseInt(card.querySelector('.session-end-week').value, 10) || state.totalWeeks;
+      endWeek = parseInt(card.querySelector('.session-end-week').value, 10) || targetTotalWeeks;
       if (startWeek > endWeek) {
         return alert(`时间段 ${i + 1}：起始周不能大于结束周`);
       }
@@ -1922,23 +1774,21 @@ async function saveCourseForm() {
   }
 
   const timetableId = state.managingCourseTimetableId || state.activeTimetable.id;
+  const courseData = {
+    id: state.editingCourseId,
+    timetableId,
+    name,
+    teacher,
+    color: colorInt,
+    note
+  };
 
-  // Conflict Detection
+  // Conflict Detection against the target timetable's totalWeeks
   const existingCourses = await getCoursesWithSessions(timetableId);
-  const conflicts = checkCourseConflicts(existingCourses, sessions, state.totalWeeks, state.editingCourseId);
+  const conflicts = checkCourseConflicts(existingCourses, sessions, targetTotalWeeks, state.editingCourseId);
 
   if (conflicts.length > 0) {
-    state.pendingForceSaveCourse = {
-      courseData: {
-        id: state.editingCourseId,
-        timetableId,
-        name,
-        teacher,
-        color: colorInt,
-        note
-      },
-      sessionsData: sessions
-    };
+    state.pendingForceSaveCourse = { courseData, sessionsData: sessions };
 
     const conflictListEl = document.getElementById('conflict-list-content');
     conflictListEl.innerHTML = conflicts.map(c => `
@@ -1948,25 +1798,11 @@ async function saveCourseForm() {
       </div>
     `).join('');
 
-    document.getElementById('conflict-dialog-overlay').classList.add('visible');
+    showModal('conflict-dialog-overlay');
     return;
   }
 
-  await saveCourseWithSessions({
-    id: state.editingCourseId,
-    timetableId,
-    name,
-    teacher,
-    color: colorInt,
-    note
-  }, sessions);
-
-  closeCourseEditorModal();
-  await refreshAll();
-  if (document.getElementById('course-list-modal').classList.contains('visible')) {
-    openCourseListModal(timetableId);
-  }
-  showFluidCloudToast('保存成功', `课程“${name}”已保存`);
+  await commitCourseSave(courseData, sessions, `课程“${name}”已保存`);
 }
 
 // ---------------- Settings Modal ----------------
@@ -1988,7 +1824,7 @@ function openSettingsModal() {
   });
 
   // Cell height slider
-  const cellHeight = settings.courseCellHeightDp || 88;
+  const cellHeight = settings.courseCellHeightDp || DEFAULT_CELL_HEIGHT;
   const slider = document.getElementById('setting-cell-height-slider');
   slider.value = cellHeight;
   document.getElementById('setting-cell-height-label').textContent = `${cellHeight} px`;
@@ -1997,12 +1833,11 @@ function openSettingsModal() {
   document.getElementById('setting-show-noncurrent-switch').checked = settings.showNonCurrentWeekCourses ?? true;
 
   renderWidgetPreviews();
-
-  document.getElementById('settings-modal').classList.add('visible');
+  showModal('settings-modal');
 }
 
-function closeSettingsModal() {
-  document.getElementById('settings-modal').classList.remove('visible');
+async function saveSetting(patch) {
+  state.settings = await updateSettings(patch);
 }
 
 function bindSettingsEvents() {
@@ -2012,8 +1847,7 @@ function bindSettingsEvents() {
     if (enabled) {
       await requestNotificationPermission();
     }
-    await updateSettings({ notificationsEnabled: enabled });
-    state.settings.notificationsEnabled = enabled;
+    await saveSetting({ notificationsEnabled: enabled });
   });
 
   // Reminder test sound
@@ -2028,8 +1862,7 @@ function bindSettingsEvents() {
       document.querySelectorAll('.filter-chip[data-min]').forEach(c => c.classList.remove('active'));
       chip.classList.add('active');
       const min = parseInt(chip.dataset.min, 10);
-      await updateSettings({ reminderMinutes: min });
-      state.settings.reminderMinutes = min;
+      await saveSetting({ reminderMinutes: min });
     });
   });
 
@@ -2037,30 +1870,28 @@ function bindSettingsEvents() {
   document.querySelectorAll('input[name="themeModeRadio"]').forEach(r => {
     r.addEventListener('change', async (e) => {
       const mode = e.target.value;
-      await updateSettings({ themeMode: mode });
-      state.settings.themeMode = mode;
+      await saveSetting({ themeMode: mode });
       applyTheme(mode);
     });
   });
 
-  // Cell height slider (lightweight DOM preview on input, DB persistence on change)
+  // Cell height slider (pure CSS variable update on input, DB persistence on change)
   const slider = document.getElementById('setting-cell-height-slider');
   slider.addEventListener('input', (e) => {
     const val = parseInt(e.target.value, 10);
     document.getElementById('setting-cell-height-label').textContent = `${val} px`;
     state.settings.courseCellHeightDp = val;
-    applyRowHeightToGrid(val);
+    document.documentElement.style.setProperty('--cell-height', `${val}px`);
   });
   slider.addEventListener('change', async (e) => {
     const val = parseInt(e.target.value, 10);
-    await updateSettings({ courseCellHeightDp: val });
+    await saveSetting({ courseCellHeightDp: val });
   });
 
   // Non-current switch
   document.getElementById('setting-show-noncurrent-switch').addEventListener('change', async (e) => {
     const checked = e.target.checked;
-    await updateSettings({ showNonCurrentWeekCourses: checked });
-    state.settings.showNonCurrentWeekCourses = checked;
+    await saveSetting({ showNonCurrentWeekCourses: checked });
     renderWeekGrid();
   });
 
@@ -2076,31 +1907,34 @@ function bindSettingsEvents() {
     document.getElementById('input-file-backup-json').click();
   });
 
-  document.getElementById('input-file-backup-json').addEventListener('change', (e) => {
+  document.getElementById('input-file-backup-json').addEventListener('change', async (e) => {
     const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      try {
-        await importFullBackupJSON(evt.target.result);
-        alert('数据恢复成功！正在重新载入...');
-        location.reload();
-      } catch (err) {
-        alert(`导入备份失败: ${err.message}`);
-      }
-    };
-    reader.readAsText(file, 'utf-8');
     e.target.value = '';
+    if (!file) return;
+    try {
+      const jsonText = await file.text();
+      await importFullBackupJSON(jsonText);
+      alert('数据恢复成功！正在重新载入...');
+      location.reload();
+    } catch (err) {
+      alert(`导入备份失败: ${err.message}`);
+    }
   });
 
-  // Check update simulation
-  document.getElementById('btn-check-update').addEventListener('click', () => {
+  // Check update (checks Service Worker registration update if available)
+  document.getElementById('btn-check-update').addEventListener('click', async () => {
     const btn = document.getElementById('btn-check-update');
     btn.textContent = '检查中...';
+    try {
+      if ('serviceWorker' in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg) await reg.update();
+      }
+    } catch (e) {}
     setTimeout(() => {
       btn.textContent = '检查更新';
-      alert('已是最新版本 (v1.0.0 Web Edition)');
-    }, 700);
+      alert(`已是最新版本 (${APP_VERSION} Web Edition)`);
+    }, 500);
   });
 }
 
@@ -2108,18 +1942,15 @@ function renderWidgetPreviews() {
   const container = document.getElementById('widget-preview-box');
   if (!container || !state.activeTimetable) return;
 
-  const today = new Date();
-  const dayOfWeek = (today.getDay() + 6) % 7 + 1; // 1..7
+  const dayOfWeek = getIsoDayOfWeek(new Date());
+  const previewWeek = state.currentWeek || 1;
 
   // Find today's courses
   const todaySessions = [];
-  state.courses.forEach(item => {
-    item.sessions.forEach(sess => {
-      if (sess.dayOfWeek === dayOfWeek) {
-        const weeks = resolveWeeks(sess.weekType, sess.startWeek, sess.endWeek, sess.customWeeks, state.totalWeeks);
-        if (weeks.has(state.currentWeek || 1)) {
-          todaySessions.push({ course: item.course, session: sess });
-        }
+  state.courses.forEach(({ course, sessions }) => {
+    sessions.forEach(sess => {
+      if (sess.dayOfWeek === dayOfWeek && isSessionInWeek(sess, previewWeek, state.totalWeeks)) {
+        todaySessions.push({ course, session: sess });
       }
     });
   });

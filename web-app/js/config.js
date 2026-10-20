@@ -8,6 +8,10 @@
  * 并自动转发至您的反向代理 (https://my-free-ai.ccwu.cc/v1/chat/completions)。
  */
 
+export const APP_VERSION = 'v1.0.0';
+export const DEFAULT_TOTAL_WEEKS = 18;
+export const DEFAULT_CELL_HEIGHT = 88;
+
 export const AI_CONFIG = {
   // 服务端代理端点（同源访问使用相对路径，跨域访问使用完整的 workers.dev 端点）
   ENDPOINT: (typeof window !== 'undefined' && window.location.hostname.includes('workers.dev'))

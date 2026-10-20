@@ -2,8 +2,13 @@
  * Theme & Color utilities matching Material Design 3 and SleepIn Color.kt.
  */
 
+export const DEFAULT_COURSE_COLOR_INT = 0xFF4A90D9;
+export const DEFAULT_COURSE_COLOR_HEX = '#4A90D9';
+export const THEME_COLOR_LIGHT = '#36618E';
+export const THEME_COLOR_DARK = '#111418';
+
 export const DEFAULT_COURSE_COLORS = [
-  0xFF4A90D9, // Blue
+  DEFAULT_COURSE_COLOR_INT, // Blue
   0xFF67C23A, // Green
   0xFFE6A23C, // Yellow/Amber
   0xFFF56C6C, // Coral Red
@@ -18,14 +23,14 @@ export const DEFAULT_COURSE_COLORS = [
 ];
 
 export function intToHexColor(intVal) {
-  if (intVal == null) return '#4A90D9';
+  if (intVal == null) return DEFAULT_COURSE_COLOR_HEX;
   // Strip alpha if present (take lower 24 bits)
   const hex = (intVal & 0x00FFFFFF).toString(16).padStart(6, '0');
   return '#' + hex;
 }
 
 export function hexToIntColor(hexStr) {
-  if (!hexStr) return 0xFF4A90D9;
+  if (!hexStr) return DEFAULT_COURSE_COLOR_INT;
   const clean = hexStr.replace('#', '');
   const parsed = parseInt(clean, 16);
   // Add 0xFF000000 alpha channel
@@ -33,7 +38,7 @@ export function hexToIntColor(hexStr) {
 }
 
 export function getContrastTextColor(hexColor) {
-  const hex = String(hexColor || '#4A90D9').replace('#', '');
+  const hex = String(hexColor || DEFAULT_COURSE_COLOR_HEX).replace('#', '');
   if (hex.length !== 6) return '#FFFFFF';
   const r = parseInt(hex.slice(0, 2), 16);
   const g = parseInt(hex.slice(2, 4), 16);
@@ -52,26 +57,20 @@ export function applyTheme(themeMode = 'SYSTEM') {
     isDark = false;
   } else {
     // SYSTEM
-    isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    isDark = Boolean(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
   }
 
-  if (isDark) {
-    root.classList.add('dark');
-  } else {
-    root.classList.remove('dark');
-  }
+  root.classList.toggle('dark', isDark);
 
   // Update theme meta color for mobile browser status bar
   const themeMeta = document.querySelector('meta[name="theme-color"]');
   if (themeMeta) {
-    themeMeta.content = isDark ? '#111418' : '#36618E';
+    themeMeta.content = isDark ? THEME_COLOR_DARK : THEME_COLOR_LIGHT;
   }
 }
 
 export function listenSystemThemeChange(onThemeChange) {
   if (window.matchMedia) {
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-      onThemeChange();
-    });
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', onThemeChange);
   }
 }

@@ -316,6 +316,7 @@ html, body {
 .timeline-sidebar {
   width: var(--timeline-width);
   min-width: var(--timeline-width);
+  height: calc(var(--period-count, 14) * var(--cell-height));
   flex-shrink: 0;
   border-right: 1px solid var(--outline-variant);
   background-color: var(--surface-container-lowest);
@@ -355,6 +356,7 @@ html, body {
 /* Grid Matrix */
 .grid-content {
   flex: 1;
+  height: calc(var(--period-count, 14) * var(--cell-height));
   position: relative;
   background-color: var(--surface);
   overflow: hidden;
@@ -388,6 +390,7 @@ html, body {
 /* Current Time Horizontal Line */
 .current-time-line {
   position: absolute;
+  top: calc(var(--offset-rows, 0) * var(--cell-height));
   left: 0;
   width: 100%;
   height: 2px;
@@ -419,6 +422,8 @@ html, body {
 
 .course-cell-card {
   position: absolute;
+  top: calc(var(--start-row, 0) * var(--cell-height) + 2px);
+  height: calc(var(--span, 1) * var(--cell-height) - 4px);
   border-radius: var(--cell-radius);
   padding: 4px 4px;
   cursor: pointer;
@@ -905,9 +910,8 @@ textarea.form-control {
   color: var(--primary);
 }
 
-.btn-text {
-  background-color: transparent;
-  color: var(--primary);
+.btn-block {
+  width: 100%;
 }
 
 .btn-danger {
@@ -1385,8 +1389,90 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 /* ==========================================================================
-   OCR Table & Conflict Dialog Helpers
+   OCR Table, Detail Sheet & Conflict Dialog Helpers
    ========================================================================== */
+[hidden] {
+  display: none !important;
+}
+
+.detail-info-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.detail-time-text {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.detail-item-text {
+  font-size: 0.9rem;
+}
+
+.detail-note-text {
+  font-size: 0.85rem;
+  color: var(--on-surface-variant);
+}
+
+.detail-actions-row {
+  display: flex;
+  gap: 10px;
+}
+
+.detail-actions-row > .btn {
+  flex: 1;
+}
+
+.dropzone-box {
+  border: 2px dashed var(--outline);
+  border-radius: 12px;
+  padding: 24px;
+  text-align: center;
+  cursor: pointer;
+  background: var(--surface-container-lowest);
+  transition: border-color 0.2s;
+}
+
+.dropzone-box.drag-active {
+  border-color: var(--primary);
+}
+
+.parsed-table-scroll {
+  max-height: 220px;
+  overflow-y: auto;
+  overflow-x: auto;
+  border: 1px solid var(--outline-variant);
+  border-radius: 8px;
+}
+
+.parsed-records-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+  text-align: left;
+}
+
+.parsed-records-table thead {
+  background: var(--surface-container);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.parsed-th {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--outline-variant);
+}
+
+.parsed-th-action {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--outline-variant);
+  width: 40px;
+}
+
 .parsed-table-row {
   border-bottom: 1px solid var(--outline-variant);
 }

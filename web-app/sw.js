@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sleepin-pwa-v13';
+const CACHE_NAME = 'sleepin-pwa-v14';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -19,6 +19,15 @@ const ASSETS_TO_CACHE = [
   './assets/audio/reminder.wav',
   './assets/images/SleepIn.png'
 ];
+
+function cacheIfBasicOk(request, response) {
+  if (response && response.status === 200 && response.type === 'basic') {
+    const clone = response.clone();
+    caches.open(CACHE_NAME).then((cache) => {
+      cache.put(request, clone);
+    });
+  }
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -48,31 +57,20 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
-  if (url.pathname.endsWith('/chat/completions') || url.pathname === '/api/chat') return;
+  if (url.pathname.endsWith('/chat/completions')) return;
 
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       if (cachedResponse) {
         // Stale-while-revalidate in background for same-origin static assets
         fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
-            const responseClone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, responseClone);
-            });
-          }
+          cacheIfBasicOk(event.request, networkResponse);
         }).catch(() => {});
         return cachedResponse;
       }
 
       return fetch(event.request).then((networkResponse) => {
-        if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
-          return networkResponse;
-        }
-        const responseToCache = networkResponse.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(event.request, responseToCache);
-        });
+        cacheIfBasicOk(event.request, networkResponse);
         return networkResponse;
       }).catch(() => {
         if (event.request.mode === 'navigate') {

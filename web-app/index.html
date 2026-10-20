@@ -147,17 +147,17 @@
       <div class="sheet-drag-handle"></div>
       <div class="sheet-content">
         <div class="sheet-title" id="detail-course-name">课程详情</div>
-        <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px;">
-          <div style="font-size: 1rem; font-weight: 700; color: var(--primary);" id="detail-time"></div>
-          <div style="font-size: 0.9rem;" id="detail-current-status"></div>
-          <div style="font-size: 0.9rem;" id="detail-location"></div>
-          <div style="font-size: 0.9rem;" id="detail-teacher"></div>
-          <div style="font-size: 0.9rem;" id="detail-weeks"></div>
-          <div style="font-size: 0.85rem; color: var(--on-surface-variant);" id="detail-note"></div>
+        <div class="detail-info-list">
+          <div class="detail-time-text" id="detail-time"></div>
+          <div class="detail-item-text" id="detail-current-status"></div>
+          <div class="detail-item-text" id="detail-location"></div>
+          <div class="detail-item-text" id="detail-teacher"></div>
+          <div class="detail-item-text" id="detail-weeks"></div>
+          <div class="detail-note-text" id="detail-note"></div>
         </div>
-        <div style="display: flex; gap: 10px;">
-          <button class="btn btn-primary" style="flex: 1;" id="btn-edit-course-from-detail">编辑此课程</button>
-          <button class="btn btn-secondary" style="flex: 1;" id="btn-close-course-detail">关闭</button>
+        <div class="detail-actions-row">
+          <button class="btn btn-primary" id="btn-edit-course-from-detail">编辑此课程</button>
+          <button class="btn btn-secondary" id="btn-close-course-detail">关闭</button>
         </div>
       </div>
     </div>
@@ -211,7 +211,7 @@
         </div>
 
         <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
-          <input type="file" id="input-file-timetable-csv" accept=".csv,text/csv" style="display: none;">
+          <input type="file" id="input-file-timetable-csv" accept=".csv,text/csv" hidden>
           <button type="button" class="btn btn-outlined btn-sm" id="btn-import-timetable-csv">导入 CSV 课程表</button>
           <button type="button" class="btn btn-outlined btn-sm" id="btn-export-timetable-csv">导出 CSV 课程表</button>
           <button type="button" class="btn btn-secondary btn-sm" id="btn-open-screenshot-csv">📸 课表截图转 CSV</button>
@@ -295,7 +295,7 @@
         </div>
 
         <div style="display: flex; gap: 8px;">
-          <input type="file" id="input-file-schedule-csv" accept=".csv,text/csv" style="display: none;">
+          <input type="file" id="input-file-schedule-csv" accept=".csv,text/csv" hidden>
           <button type="button" class="btn btn-outlined btn-sm" id="btn-import-schedule-csv">导入 CSV 作息表</button>
           <button type="button" class="btn btn-outlined btn-sm" id="btn-export-schedule-csv">导出 CSV 作息表</button>
         </div>
@@ -489,7 +489,7 @@
           </p>
           <div style="display: flex; gap: 10px; margin-top: 4px;">
             <button class="btn btn-outlined btn-sm" id="btn-export-backup-json">导出完整备份</button>
-            <input type="file" id="input-file-backup-json" accept=".json,application/json" style="display: none;">
+            <input type="file" id="input-file-backup-json" accept=".json,application/json" hidden>
             <button class="btn btn-outlined btn-sm" id="btn-import-backup-json">导入数据恢复</button>
           </div>
         </div>
@@ -529,8 +529,8 @@
         <!-- Tab 1: Image Mode -->
         <div id="panel-image-mode" style="display: flex; flex-direction: column; gap: 12px;">
           <!-- Dropzone -->
-          <div id="dropzone-screenshot" style="border: 2px dashed var(--outline); border-radius: 12px; padding: 24px; text-align: center; cursor: pointer; background: var(--surface-container-lowest); transition: border-color 0.2s;">
-            <input type="file" id="input-screenshot-file" accept="image/*" style="display: none;">
+          <div id="dropzone-screenshot" class="dropzone-box">
+            <input type="file" id="input-screenshot-file" accept="image/*" hidden>
             <div id="dropzone-prompt">
               <div style="font-size: 2rem; margin-bottom: 8px;">🖼️</div>
               <div style="font-weight: 600; font-size: 0.95rem; margin-bottom: 4px;">点击或拖拽上传课表截图</div>
@@ -544,9 +544,7 @@
             </div>
           </div>
 
-
-
-          <button class="btn btn-primary" id="btn-start-vision-parse" style="width: 100%;">
+          <button class="btn btn-primary btn-block" id="btn-start-vision-parse">
             <span>🚀 开始智能解析截图</span>
           </button>
         </div>
@@ -557,7 +555,7 @@
             <label class="form-label">粘贴教务系统课表文本 / 原始课表文字</label>
             <textarea class="form-control" id="input-raw-timetable-text" placeholder="例如：高等数学 周一 第1-2节 理教201 1-16周&#10;大学英语 周三 第3-4节 外语楼305 1-16(单)" style="height: 120px; font-size: 0.85rem; font-family: monospace;"></textarea>
           </div>
-          <button class="btn btn-primary" id="btn-start-text-parse" style="width: 100%;">
+          <button class="btn btn-primary btn-block" id="btn-start-text-parse">
             <span>⚡ 智能提取课程记录</span>
           </button>
         </div>
@@ -571,17 +569,17 @@
             <button type="button" class="btn btn-sm btn-outlined" id="btn-add-parsed-row">+ 增加一行</button>
           </div>
 
-          <div style="max-height: 220px; overflow-y: auto; overflow-x: auto; border: 1px solid var(--outline-variant); border-radius: 8px;">
-            <table style="width: 100%; border-collapse: collapse; font-size: 0.75rem; text-align: left;" id="parsed-records-table">
-              <thead style="background: var(--surface-container); position: sticky; top: 0; z-index: 1;">
+          <div class="parsed-table-scroll">
+            <table class="parsed-records-table" id="parsed-records-table">
+              <thead>
                 <tr>
-                  <th style="padding: 6px 8px; border-bottom: 1px solid var(--outline-variant);">课程名</th>
-                  <th style="padding: 6px 8px; border-bottom: 1px solid var(--outline-variant);">星期</th>
-                  <th style="padding: 6px 8px; border-bottom: 1px solid var(--outline-variant);">节次</th>
-                  <th style="padding: 6px 8px; border-bottom: 1px solid var(--outline-variant);">周次</th>
-                  <th style="padding: 6px 8px; border-bottom: 1px solid var(--outline-variant);">地点</th>
-                  <th style="padding: 6px 8px; border-bottom: 1px solid var(--outline-variant);">教师</th>
-                  <th style="padding: 6px 8px; border-bottom: 1px solid var(--outline-variant); width: 40px;">操作</th>
+                  <th class="parsed-th">课程名</th>
+                  <th class="parsed-th">星期</th>
+                  <th class="parsed-th">节次</th>
+                  <th class="parsed-th">周次</th>
+                  <th class="parsed-th">地点</th>
+                  <th class="parsed-th">教师</th>
+                  <th class="parsed-th-action">操作</th>
                 </tr>
               </thead>
               <tbody id="parsed-records-tbody"></tbody>
